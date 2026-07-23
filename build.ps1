@@ -87,6 +87,23 @@ function Get-JavaHome {
     return $LocalJdkDir
 }
 
+function Get-JavaExe {
+    $javaHome = Get-JavaHome
+    $javaExe = Join-Path $javaHome 'bin\java.exe'
+    if (Test-Path $javaExe) { return $javaExe }
+    $systemJava = Find-CommandPath 'java.exe'
+    if ($systemJava) { return $systemJava }
+    return $javaExe
+}
+
+function Invoke-JavaVersion {
+    $javaExe = Get-JavaExe
+    if (-not (Test-Path $javaExe) -and -not (Find-CommandPath 'java.exe')) {
+        throw 'java 未找到，请先运行 .\build.ps1 install-jdk'
+    }
+    & $javaExe '-version'
+}
+
 function Set-AndroidEnv {
     $javaHome = Get-JavaHome
     if (Test-Path (Join-Path $javaHome 'bin\java.exe')) {
@@ -168,7 +185,7 @@ function Install-Jdk {
     $javaHome = Get-JavaHome
     if (Test-Path (Join-Path $javaHome 'bin\java.exe')) {
         Write-Host "使用 Java: $javaHome"
-        & (Join-Path $javaHome 'bin\java.exe') -version
+        Invoke-JavaVersion
         return
     }
 
@@ -185,7 +202,7 @@ function Install-Jdk {
     if (-not $rootDir) { throw 'JDK 解压失败，未找到根目录' }
     Move-Item $rootDir.FullName $LocalJdkDir
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
-    & (Join-Path $LocalJdkDir 'bin\java.exe') -version
+    Invoke-JavaVersion
 }
 
 function Install-AndroidSdk {
@@ -293,7 +310,7 @@ function Doctor {
 
     Write-Section 'Java'
     $javaHome = Get-JavaHome
-    if (Test-Path (Join-Path $javaHome 'bin\java.exe')) { & (Join-Path $javaHome 'bin\java.exe') -version } else { Write-Host 'java 未找到: 运行 .\build.ps1 install-jdk' }
+    if (Test-Path (Join-Path $javaHome 'bin\java.exe')) { Invoke-JavaVersion } else { Write-Host 'java 未找到: 运行 .\build.ps1 install-jdk' }
 
     Write-Section 'Android SDK'
     Write-Host "ANDROID_SDK_ROOT=$AndroidSdkRoot"
