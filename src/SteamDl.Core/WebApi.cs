@@ -16,7 +16,9 @@ namespace SteamDl.Core
         readonly byte[] _indexHtml;
         volatile bool _running;
 
-        public WebApi(int port = 8630, string host = "+")
+        // 默认仅监听本机回环地址。Windows 上监听 http://+:port/ 需要 URL ACL 管理员授权，
+        // 否则 HttpListener.Start() 会抛出“拒绝访问”。
+        public WebApi(int port = 8630, string host = "127.0.0.1")
         {
             _listener.Prefixes.Add($"http://{host}:{port}/");
 
