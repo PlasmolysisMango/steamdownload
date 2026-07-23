@@ -50,18 +50,74 @@ dotnet run --project src/SteamDl.Server   # 浏览器打开 http://127.0.0.1:863
 
 ## 构建 Android APK
 
-需要:.NET 9 SDK、JDK 17、Android SDK（装过 Android Studio 即有）。
+需要:.NET 9 SDK、JDK 17、Android SDK（装过 Android Studio 即有）。也可以直接让 [build.mjs](file:///root/workspace/project/steamdownload/build.mjs) 自动安装到项目本地 `.tools/`。
+
+常用命令：
 
 ```bash
+# 检查当前构建环境
+node build.mjs doctor
+
+# 安装/还原 Android 构建依赖：.NET SDK、JDK、Android SDK、Android workload、NuGet 包
 node build.mjs install-deps
+
+# 使用默认配置构建 APK
 node build.mjs build-apk
-# 或者直接运行 .NET 命令:
+
+# 明确使用 Release、Android API 35、Build Tools 35.0.0 构建 APK
+node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0
+
+# 使用外部正式 keystore 签名 Release APK
+node build.mjs build-apk --config=Release --keystore=/path/steamdl-release.keystore --key-alias=steamdl --store-pass=你的密码 --key-pass=你的密码
+
+# 也可以用环境变量传入正式签名配置
+ANDROID_KEYSTORE=/path/steamdl-release.keystore ANDROID_KEY_ALIAS=steamdl ANDROID_STORE_PASS=你的密码 ANDROID_KEY_PASS=你的密码 node build.mjs build-apk --config=Release
+
+# 网络或 NuGet 配置异常时，显式指定 NuGet 官方源
+node build.mjs build-apk --nuget-source=https://api.nuget.org/v3/index.json
+
+# 清理 bin/obj/artifacts
+node build.mjs clean
+```
+
+`build-apk` 默认配置：
+
+```text
+--config=Release
+--android-api=35
+--android-build-tools=35.0.0
+--nuget-source=https://api.nuget.org/v3/index.json
+ANDROID_SDK_ROOT=.tools/android-sdk（未设置系统 ANDROID_SDK_ROOT/ANDROID_HOME 时）
+APK 输出目录=artifacts/apk
+Release keystore 默认路径=.tools/keystore/steamdl-release.keystore
+Release key alias 默认值=steamdl
+```
+
+实际执行流程：
+
+```text
+1. 确认可用 .NET 9 SDK；没有则安装到 .tools/dotnet 或 .tools/dotnet-win
+2. 安装/复用 JDK 17
+3. 安装/复用 Android cmdline-tools、platform-tools、platforms;android-<api>、build-tools;<version>
+4. 执行 dotnet workload restore src/SteamDl.Android --source <nuget-source>
+5. 执行 dotnet restore src/SteamDl.Android --source <nuget-source>
+6. Release 构建时确认 keystore：未指定则自动生成并复用 `.tools/keystore/steamdl-release.keystore`
+7. 执行 dotnet publish src/SteamDl.Android -c <config> -p:AndroidPackageFormat=apk，并显式传入 AndroidSdkDirectory/JavaSdkDirectory；Release 时额外传入 AndroidKeyStore/AndroidSigning* 参数
+8. 将生成的 .apk 复制到 artifacts/apk
+```
+
+当前 Android 项目配置为 `net9.0-android`，`RuntimeIdentifiers=android-arm64`，因此产物面向 arm64 Android 设备。`Debug` APK 通常会自动使用 debug keystore 签名，适合临时测试；`Release` APK 现在会自动签名：如果未通过参数或环境变量指定 keystore，脚本会生成并复用 `.tools/keystore/steamdl-release.keystore`。注意不要删除这个 keystore，否则后续同包名 APK 无法覆盖升级旧安装，只能卸载重装。正式分发时应使用你自己长期保存的 keystore，并通过 `--keystore` / `--key-alias` / `--store-pass` / `--key-pass` 或环境变量传入。
+
+如果不用脚本，等价核心命令大致是：
+
+```bash
 dotnet workload restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
-dotnet publish src/SteamDl.Android -c Release
+dotnet restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
+dotnet publish src/SteamDl.Android -c Release -p:AndroidPackageFormat=apk -p:AndroidSdkDirectory=<Android SDK路径> -p:JavaSdkDirectory=<JDK路径> -p:AndroidKeyStore=true -p:AndroidSigningKeyStore=<keystore路径> -p:AndroidSigningKeyAlias=steamdl -p:AndroidSigningStorePass=<密码> -p:AndroidSigningKeyPass=<密码>
 ```
 
 侧载安装后首次启动会跳转"所有文件访问"授权页（写 /sdcard/Download 需要），
-授权后返回应用即可使用。下载目录默认 `/sdcard/Download/steamdl/app_<appid>`。
+授权后返回应用即可使用。下载目录默认优先使用已保存的配置；未配置时使用 `/sdcard/Download/steamdl`。
 
 ## 使用说明
 

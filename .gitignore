@@ -4,6 +4,8 @@ obj/
 
 # local tooling (dotnet sdk / nuget cache / vendored clone)
 .tools/
+*.keystore
+*.jks
 
 # runtime artifacts
 *.log

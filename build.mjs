@@ -25,6 +25,10 @@ const dotnetChannel = opts.dotnetChannel || process.env.DOTNET_CHANNEL || '9.0';
 const androidApi = opts.androidApi || process.env.ANDROID_API || '35';
 const androidBuildTools = opts.androidBuildTools || process.env.ANDROID_BUILD_TOOLS || '35.0.0';
 const nugetSource = opts.nugetSource || process.env.NUGET_SOURCE || 'https://api.nuget.org/v3/index.json';
+const keystorePath = opts.keystore || process.env.ANDROID_KEYSTORE || path.join(root, '.tools', 'keystore', 'steamdl-release.keystore');
+const keyAlias = opts.keyAlias || process.env.ANDROID_KEY_ALIAS || 'steamdl';
+const storePass = opts.storePass || process.env.ANDROID_STORE_PASS || 'steamdl-local-release';
+const keyPass = opts.keyPass || process.env.ANDROID_KEY_PASS || storePass;
 
 const toolsDir = path.join(root, '.tools');
 const localDotnetDir = path.join(toolsDir, isWin ? 'dotnet-win' : 'dotnet');
@@ -65,7 +69,7 @@ async function main() {
 }
 
 function help() {
-  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --nuget-source=https://api.nuget.org/v3/index.json\n  node build.mjs clean\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  NuGet source defaults to ${nugetSource}. Override with --nuget-source=URL or NUGET_SOURCE=URL.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n`);
+  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --keystore=/path/release.keystore --key-alias=steamdl --store-pass=*** --key-pass=***\n  node build.mjs build-apk --nuget-source=https://api.nuget.org/v3/index.json\n  node build.mjs clean\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  NuGet source defaults to ${nugetSource}. Override with --nuget-source=URL or NUGET_SOURCE=URL.\n  Release APKs are signed. If no keystore is provided, a local keystore is generated at .tools/keystore/.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n`);
 }
 
 function parseOptions(optionArgs) {
@@ -175,10 +179,10 @@ function getDotnetSdkPath() {
   return null;
 }
 
-function dotnet(commandArgs) {
+function dotnet(commandArgs, extraEnv = {}) {
   const sdk = getDotnetSdkPath();
   if (!sdk) throw new Error('未找到可用的 .NET SDK。若系统 dotnet 只有 Runtime，请运行: node build.mjs install-dotnet');
-  return run(sdk, commandArgs, { env: dotnetEnv() });
+  return run(sdk, commandArgs, { env: dotnetEnv(extraEnv) });
 }
 
 function nugetSourceArgs() {
@@ -233,6 +237,10 @@ function getJavaHome() {
   const java = executable('java');
   if (java) return path.dirname(path.dirname(java));
   return localJdkDir;
+}
+
+function getKeytool() {
+  return path.join(getJavaHome(), 'bin', isWin ? 'keytool.exe' : 'keytool');
 }
 
 function hasJava() {
@@ -341,7 +349,7 @@ async function restoreServer() {
 async function restoreAndroid() {
   await installWorkload();
   await installAndroidSdk();
-  dotnet(['restore', androidProject, ...nugetSourceArgs()]);
+  dotnet(['restore', androidProject, ...nugetSourceArgs()], androidEnv());
 }
 
 async function buildServer() {
@@ -367,12 +375,51 @@ async function buildApk() {
   await restoreAndroid();
   rmrf(apkOut);
   mkdirp(apkOut);
-  dotnet(['publish', androidProject, '-c', config, '-p:AndroidPackageFormat=apk']);
+  const signingArgs = config.toLowerCase() === 'release' ? ensureReleaseKeystore() : [];
+  dotnet([
+    'publish', androidProject,
+    '-c', config,
+    '-p:AndroidPackageFormat=apk',
+    `-p:AndroidSdkDirectory=${androidSdkRoot}`,
+    `-p:JavaSdkDirectory=${getJavaHome()}`,
+    ...signingArgs,
+  ], androidEnv());
   const apkFiles = findFiles(path.join(root, 'src', 'SteamDl.Android', 'bin', config), f => f.endsWith('.apk'));
   if (!apkFiles.length) throw new Error('未找到 APK 产物');
   for (const file of apkFiles) fs.copyFileSync(file, path.join(apkOut, path.basename(file)));
   console.log(`APK 产物目录: ${apkOut}`);
   for (const file of fs.readdirSync(apkOut).filter(f => f.endsWith('.apk'))) console.log(path.join(apkOut, file));
+}
+
+function ensureReleaseKeystore() {
+  mkdirp(path.dirname(keystorePath));
+  if (!exists(keystorePath)) {
+    const keytool = getKeytool();
+    if (!exists(keytool)) throw new Error(`未找到 keytool，无法生成 release keystore: ${keytool}`);
+    console.log(`生成本地 Release keystore: ${keystorePath}`);
+    run(keytool, [
+      '-genkeypair',
+      '-v',
+      '-keystore', keystorePath,
+      '-alias', keyAlias,
+      '-keyalg', 'RSA',
+      '-keysize', '2048',
+      '-validity', '10000',
+      '-storepass', storePass,
+      '-keypass', keyPass,
+      '-dname', 'CN=SteamDl, OU=SteamDl, O=SteamDl, L=Local, S=Local, C=US',
+    ]);
+  } else {
+    console.log(`使用 Release keystore: ${keystorePath}`);
+  }
+
+  return [
+    '-p:AndroidKeyStore=true',
+    `-p:AndroidSigningKeyStore=${keystorePath}`,
+    `-p:AndroidSigningKeyAlias=${keyAlias}`,
+    `-p:AndroidSigningStorePass=${storePass}`,
+    `-p:AndroidSigningKeyPass=${keyPass}`,
+  ];
 }
 
 function clean() {
