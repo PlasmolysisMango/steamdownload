@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <RollForward>LatestMajor</RollForward>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- external 下的 DepotDownloader 源码(GPL-2.0)直接编入本程序集,
+         以复用其 internal 类;详见 external/DepotDownloader/LICENSE -->
+    <NoWarn>$(NoWarn);CS1998</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- DepotDownloader 核心源码(未修改),排除的 Program/Ansi/PlatformUtilities
+         等由 Shims 目录提供替身实现 -->
+    <Compile Include="..\..\external\DepotDownloader\*.cs" LinkBase="Vendor" />
+    <!-- Web UI 单页,以嵌入资源方式由 WebApi 提供 -->
+    <EmbeddedResource Include="wwwroot\index.html" LogicalName="index.html" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="protobuf-net" Version="3.2.56" />
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="SteamKit2" Version="3.4.0" />
+  </ItemGroup>
+</Project>

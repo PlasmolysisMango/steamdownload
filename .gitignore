@@ -1,0 +1,10 @@
+# build outputs
+bin/
+obj/
+
+# local tooling (dotnet sdk / nuget cache / vendored clone)
+.tools/
+
+# runtime artifacts
+*.log
+.dlout*/
