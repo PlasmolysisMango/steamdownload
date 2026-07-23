@@ -17,9 +17,54 @@ external/
 └── DepotDownloader/    # 上游源码,零修改(Program/Ansi 等由 Core/Shims 替身实现替代)
 ```
 
+## Makefile 一键命令
+
+推荐在 Linux/macOS/WSL 开发机上直接使用根目录 `Makefile`：
+
+```bash
+make doctor        # 检查 dotnet/java/Android SDK 环境
+make install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
+make build         # 构建桌面服务端
+make run           # 运行 Web UI，默认 http://127.0.0.1:8630
+make build-apk     # 构建 Android APK，输出到 artifacts/apk
+```
+
+可覆盖常用变量：
+
+```bash
+make run PORT=9000
+make build-apk CONFIG=Release ANDROID_API=35 ANDROID_BUILD_TOOLS=35.0.0
+```
+
+`make install-deps` 会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`，不污染系统全局环境。
+
+## Windows PowerShell 一键命令
+
+Windows 原生环境推荐使用根目录 [build.ps1](file:///root/workspace/project/steamdownload/build.ps1)：
+
+```powershell
+.\build.ps1 doctor        # 检查 dotnet/java/Android SDK 环境
+.\build.ps1 install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
+.\build.ps1 build         # 构建桌面服务端
+.\build.ps1 run -Port 8630
+.\build.ps1 build-apk     # 构建 Android APK，输出到 artifacts\apk
+.\build.ps1 clean
+```
+
+首次运行如果 PowerShell 执行策略阻止脚本，可在项目目录执行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\build.ps1 doctor
+```
+
+`build.ps1` 会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools\`。
+
 ## 桌面运行（已在 Linux 验证）
 
 ```bash
+make run
+# 或者不用 Makefile:
 dotnet run --project src/SteamDl.Server   # 浏览器打开 http://127.0.0.1:8630
 ```
 
@@ -28,8 +73,11 @@ dotnet run --project src/SteamDl.Server   # 浏览器打开 http://127.0.0.1:863
 需要:.NET 9 SDK、JDK 17、Android SDK（装过 Android Studio 即有）。
 
 ```bash
-dotnet workload install android                # 首次一次即可
-dotnet publish src/SteamDl.Android -c Release  # 产物: bin/Release/net9.0-android/*-Signed.apk
+make install-deps
+make build-apk
+# 或者不用 Makefile:
+dotnet workload restore src/SteamDl.Android
+dotnet publish src/SteamDl.Android -c Release
 ```
 
 侧载安装后首次启动会跳转"所有文件访问"授权页（写 /sdcard/Download 需要），
