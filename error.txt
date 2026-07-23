@@ -1,0 +1,20 @@
+PS C:\Users\jack\project\steamdownload> node .\build.mjs run --port=8630
+检测到系统 dotnet 但没有可用 SDK，将安装项目本地 .NET SDK: C:\Program Files\dotnet\dotnet.exe
+使用本地 dotnet SDK: C:\Users\jack\project\steamdownload\.tools\dotnet-win\dotnet.exe
+> C:\Users\jack\project\steamdownload\.tools\dotnet-win\dotnet.exe --version
+9.0.316
+> C:\Users\jack\project\steamdownload\.tools\dotnet-win\dotnet.exe restore C:\Users\jack\project\steamdownload\src\SteamDl.Server\SteamDl.Server.csproj --source https://api.nuget.org/v3/index.json
+Restore complete (0.3s)
+
+Build succeeded in 0.6s
+启动 http://127.0.0.1:8630
+> C:\Users\jack\project\steamdownload\.tools\dotnet-win\dotnet.exe run --project C:\Users\jack\project\steamdownload\src\SteamDl.Server\SteamDl.Server.csproj -c Release --no-restore
+Unhandled exception. System.Net.HttpListenerException (5): 拒绝访问。
+   at System.Net.HttpListener.AddPrefixCore(String registeredPrefix) 
+   at System.Net.HttpListener.AddAllPrefixes()
+   at System.Net.HttpListener.Start()
+   at SteamDl.Core.WebApi.Start() in C:\Users\jack\project\steamdownload\src\SteamDl.Core\WebApi.cs:line 33
+   at Program.<Main>$(String[] args) in C:\Users\jack\project\steamdownload\src\SteamDl.Server\Program.cs:line 13
+
+ERROR: 命令失败(ExitCode=3762504530): C:\Users\jack\project\steamdownload\.tools\dotnet-win\dotnet.exe run --project C:\Users\jack\project\steamdownload\src\SteamDl.Server\SteamDl.Server.csproj -c Release --no-restore
+PS C:\Users\jack\project\steamdownload>
