@@ -24,6 +24,7 @@ const runtime = opts.runtime || process.env.RUNTIME || (isWin ? 'win-x64' : isMa
 const dotnetChannel = opts.dotnetChannel || process.env.DOTNET_CHANNEL || '9.0';
 const androidApi = opts.androidApi || process.env.ANDROID_API || '35';
 const androidBuildTools = opts.androidBuildTools || process.env.ANDROID_BUILD_TOOLS || '35.0.0';
+const nugetSource = opts.nugetSource || process.env.NUGET_SOURCE || 'https://api.nuget.org/v3/index.json';
 
 const toolsDir = path.join(root, '.tools');
 const localDotnetDir = path.join(toolsDir, isWin ? 'dotnet-win' : 'dotnet');
@@ -64,7 +65,7 @@ async function main() {
 }
 
 function help() {
-  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs clean\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n`);
+  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --nuget-source=https://api.nuget.org/v3/index.json\n  node build.mjs clean\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  NuGet source defaults to ${nugetSource}. Override with --nuget-source=URL or NUGET_SOURCE=URL.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n`);
 }
 
 function parseOptions(optionArgs) {
@@ -178,6 +179,10 @@ function dotnet(commandArgs) {
   const sdk = getDotnetSdkPath();
   if (!sdk) throw new Error('未找到可用的 .NET SDK。若系统 dotnet 只有 Runtime，请运行: node build.mjs install-dotnet');
   return run(sdk, commandArgs, { env: dotnetEnv() });
+}
+
+function nugetSourceArgs() {
+  return ['--source', nugetSource];
 }
 
 async function installDotnet() {
@@ -320,23 +325,23 @@ async function installWorkload() {
   await installDotnet();
   section('安装/还原 .NET Android workload');
   try {
-    dotnet(['workload', 'restore', androidProject]);
+    dotnet(['workload', 'restore', androidProject, ...nugetSourceArgs()]);
   } catch (e) {
     console.warn('dotnet workload restore 失败，尝试 fallback: dotnet workload install android');
     console.warn(e.message);
-    dotnet(['workload', 'install', 'android']);
+    dotnet(['workload', 'install', 'android', ...nugetSourceArgs()]);
   }
 }
 
 async function restoreServer() {
   await installDotnet();
-  dotnet(['restore', serverProject]);
+  dotnet(['restore', serverProject, ...nugetSourceArgs()]);
 }
 
 async function restoreAndroid() {
   await installWorkload();
   await installAndroidSdk();
-  dotnet(['restore', androidProject]);
+  dotnet(['restore', androidProject, ...nugetSourceArgs()]);
 }
 
 async function buildServer() {

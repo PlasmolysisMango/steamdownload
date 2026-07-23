@@ -51,7 +51,7 @@ node .\build.mjs build-apk     # 构建 Android APK，输出到 artifacts\apk
 node .\build.mjs clean
 ```
 
-`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools\`。
+`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools\`。NuGet 源默认使用 `https://api.nuget.org/v3/index.json`，如果你的网络需要镜像，可以追加 `--nuget-source=<URL>` 或设置环境变量 `NUGET_SOURCE`。
 
 ## 桌面运行（已在 Linux 验证）
 
