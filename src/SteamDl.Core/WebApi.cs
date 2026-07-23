@@ -2,6 +2,7 @@
 // 并从嵌入资源提供同一份 index.html。基于 HttpListener,
 // 无 ASP.NET Core 依赖,可同时运行于桌面(.NET)与 Android(Mono)。
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Text;
@@ -15,6 +16,9 @@ namespace SteamDl.Core
         readonly HttpListener _listener = new();
         readonly byte[] _indexHtml;
         volatile bool _running;
+
+        public static Func<string, bool> OpenPathHandler { get; set; }
+        public static Func<string> PickDirectoryHandler { get; set; }
 
         // 默认仅监听本机回环地址。Windows 上监听 http://+:port/ 需要 URL ACL 管理员授权，
         // 否则 HttpListener.Start() 会抛出“拒绝访问”。
@@ -83,11 +87,59 @@ namespace SteamDl.Core
                         await WriteJsonAsync(ctx, 200, new JsonObject
                         {
                             ["download_dir"] = JobManager.DefaultDownloadDir(),
+                            ["settings_path"] = AppSettings.SettingsPath,
                             // 引擎已内置(DepotDownloader/SteamKit2),无需外部命令行工具
                             ["engine_ready"] = true,
                             ["engine"] = "DepotDownloader",
                         });
                         break;
+
+                    case ("POST", "/api/set-download-dir"):
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var dir = body?["path"]?.GetValue<string>();
+                        try
+                        {
+                            var saved = JobManager.SetDefaultDownloadDir(dir);
+                            await WriteJsonAsync(ctx, 200, new JsonObject
+                            {
+                                ["ok"] = true,
+                                ["download_dir"] = saved,
+                                ["settings_path"] = AppSettings.SettingsPath,
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            await WriteJsonAsync(ctx, 400, Error("保存目录无效或不可写: " + ex.Message));
+                        }
+                        break;
+                    }
+
+                    case ("POST", "/api/pick-directory"):
+                    {
+                        var picked = PickDirectory();
+                        if (string.IsNullOrWhiteSpace(picked))
+                        {
+                            await WriteJsonAsync(ctx, 501, Error("无法调用系统目录选择器，请手动输入保存目录"));
+                            break;
+                        }
+
+                        try
+                        {
+                            var saved = JobManager.SetDefaultDownloadDir(picked);
+                            await WriteJsonAsync(ctx, 200, new JsonObject
+                            {
+                                ["ok"] = true,
+                                ["path"] = saved,
+                                ["settings_path"] = AppSettings.SettingsPath,
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            await WriteJsonAsync(ctx, 400, Error("选择的目录不可写: " + ex.Message));
+                        }
+                        break;
+                    }
 
                     case ("POST", "/api/parse"):
                     {
@@ -137,6 +189,31 @@ namespace SteamDl.Core
                         break;
                     }
 
+                    case ("POST", "/api/login"):
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var request = new LoginRequest
+                        {
+                            Username = body?["username"]?.GetValue<string>(),
+                        };
+
+                        if (!JobManager.Instance.TryLogin(request, out var error))
+                        {
+                            await WriteJsonAsync(ctx, error == "已有任务在进行中" ? 409 : 400, Error(error));
+                            break;
+                        }
+
+                        await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+                    }
+
+                    case ("GET", "/api/auth/status"):
+                    {
+                        var username = req.QueryString["username"];
+                        await WriteJsonAsync(ctx, 200, JobManager.Instance.AuthStatus(username));
+                        break;
+                    }
+
                     case ("POST", "/api/download"):
                     {
                         var body = await ReadJsonAsync(req);
@@ -180,6 +257,31 @@ namespace SteamDl.Core
                         await WriteJsonAsync(ctx, 200, Ok());
                         break;
 
+                    case ("POST", "/api/open-path"):
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var pathToOpen = body?["path"]?.GetValue<string>();
+                        if (string.IsNullOrWhiteSpace(pathToOpen))
+                        {
+                            await WriteJsonAsync(ctx, 400, Error("路径为空"));
+                            break;
+                        }
+                        if (!Directory.Exists(pathToOpen))
+                        {
+                            await WriteJsonAsync(ctx, 404, Error("目录不存在: " + pathToOpen));
+                            break;
+                        }
+
+                        if (!OpenDirectory(pathToOpen))
+                        {
+                            await WriteJsonAsync(ctx, 501, Error("当前平台不支持自动打开目录,请手动访问: " + pathToOpen));
+                            break;
+                        }
+
+                        await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+                    }
+
                     case ("GET", "/api/status"):
                         await WriteJsonAsync(ctx, 200, JobManager.Instance.Status());
                         break;
@@ -205,6 +307,106 @@ namespace SteamDl.Core
         static JsonObject Ok() => new() { ["ok"] = true };
 
         static JsonObject Error(string message) => new() { ["error"] = message };
+
+        static bool OpenDirectory(string path)
+        {
+            try
+            {
+                if (OpenPathHandler != null)
+                {
+                    return OpenPathHandler(path);
+                }
+
+                if (OperatingSystem.IsWindows())
+                {
+                    Process.Start(new ProcessStartInfo("explorer.exe", path) { UseShellExecute = true });
+                    return true;
+                }
+                if (OperatingSystem.IsMacOS())
+                {
+                    Process.Start("open", path);
+                    return true;
+                }
+                if (OperatingSystem.IsLinux())
+                {
+                    Process.Start("xdg-open", path);
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        static string PickDirectory()
+        {
+            try
+            {
+                if (PickDirectoryHandler != null)
+                {
+                    return PickDirectoryHandler();
+                }
+
+                if (OperatingSystem.IsWindows())
+                {
+                    var script = "$f=(New-Object -ComObject Shell.Application).BrowseForFolder(0,'选择 SteamDl 保存目录',0,17);if($f){$f.Self.Path}";
+                    return RunPickerProcess("powershell.exe", ["-NoProfile", "-STA", "-Command", script]);
+                }
+                if (OperatingSystem.IsMacOS())
+                {
+                    return RunPickerProcess("osascript", ["-e", "POSIX path of (choose folder with prompt \"选择 SteamDl 保存目录\")"]);
+                }
+                if (OperatingSystem.IsLinux())
+                {
+                    var zenity = RunPickerProcess("zenity", ["--file-selection", "--directory", "--title=选择 SteamDl 保存目录"]);
+                    if (!string.IsNullOrWhiteSpace(zenity))
+                    {
+                        return zenity;
+                    }
+                    return RunPickerProcess("kdialog", ["--getexistingdirectory", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)]);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+
+            return null;
+        }
+
+        static string RunPickerProcess(string fileName, string[] args)
+        {
+            try
+            {
+                using var process = new Process();
+                process.StartInfo = new ProcessStartInfo(fileName)
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                };
+                foreach (var arg in args)
+                {
+                    process.StartInfo.ArgumentList.Add(arg);
+                }
+
+                process.Start();
+                if (!process.WaitForExit(120000) || process.ExitCode != 0)
+                {
+                    return null;
+                }
+
+                return process.StandardOutput.ReadToEnd().Trim();
+            }
+            catch
+            {
+                return null;
+            }
+        }
 
         static async Task<JsonObject> ReadJsonAsync(HttpListenerRequest req)
         {

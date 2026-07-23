@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using DepotDownloader;
@@ -18,6 +19,11 @@ namespace SteamDl.Core
         public string Os { get; set; } = "windows";   // windows | linux | any
         public string DepotId { get; set; }
         public string OutputDir { get; set; }
+    }
+
+    public sealed class LoginRequest
+    {
+        public string Username { get; set; }
     }
 
     public sealed class JobManager
@@ -82,6 +88,11 @@ namespace SteamDl.Core
 
         public static string DefaultDownloadDir()
         {
+            return AppSettings.GetDownloadDir(DefaultDownloadDirFallback());
+        }
+
+        static string DefaultDownloadDirFallback()
+        {
             foreach (var path in new[] { "/sdcard/Download", "/storage/emulated/0/Download" })
             {
                 if (Directory.Exists(path))
@@ -93,7 +104,65 @@ namespace SteamDl.Core
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "steamdl");
         }
 
-        /// <summary>启动任务;已有任务进行中时返回 false。</summary>
+        public static string SetDefaultDownloadDir(string path)
+        {
+            AppSettings.SetDownloadDir(path);
+            return DefaultDownloadDir();
+        }
+
+        public bool TryLogin(LoginRequest request, out string error)
+        {
+            var username = request?.Username?.Trim();
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                error = "请输入 Steam 用户名";
+                return false;
+            }
+
+            lock (_sync)
+            {
+                if (_busy)
+                {
+                    error = "已有任务在进行中";
+                    return false;
+                }
+
+                _busy = true;
+                _cancelRequested = false;
+                _state = "starting";
+                _kind = "login";
+                _id = username;
+                _prompt = "";
+                _promptSecret = false;
+                _percent = 0;
+                _progressText = "";
+                _error = "";
+                _outputDir = "";
+                _log.Clear();
+            }
+
+            ConsoleRelay.Instance.DrainPendingInput();
+            Task.Run(() => RunLoginAsync(username));
+            error = null;
+            return true;
+        }
+
+        public JsonObject AuthStatus(string username)
+        {
+            EnsureAccountStoreLoaded();
+            username = username?.Trim();
+            var loggedIn = !string.IsNullOrWhiteSpace(username) &&
+                AccountSettingsStore.Instance.LoginTokens.ContainsKey(username);
+
+            return new JsonObject
+            {
+                ["logged_in"] = loggedIn,
+                ["username"] = username ?? "",
+                ["account_config"] = AccountSettingsStore.CurrentFilePath ?? "",
+            };
+        }
+
+
         public bool TryStart(DownloadRequest request, out string error)
         {
             lock (_sync)
@@ -123,7 +192,7 @@ namespace SteamDl.Core
                 _log.Clear();
                 _outputDir = Path.Combine(
                     string.IsNullOrWhiteSpace(request.OutputDir) ? DefaultDownloadDir() : request.OutputDir,
-                    (request.Kind == "workshop" ? "workshop_" : "app_") + request.Id);
+                    request.Kind == "workshop" ? "workshop_" + request.Id : "app_" + request.Id);
             }
 
             ConsoleRelay.Instance.DrainPendingInput();
@@ -185,7 +254,92 @@ namespace SteamDl.Core
                     ["log"] = string.Join('\n', tail),
                     ["error"] = _error,
                     ["output_dir"] = _outputDir,
+                    ["can_open_output"] = Directory.Exists(_outputDir),
                 };
+            }
+        }
+
+        async Task RunLoginAsync(string username)
+        {
+            try
+            {
+                lock (_sync)
+                {
+                    _state = "running";
+                    _progressText = "正在登录 Steam…";
+                }
+
+                EnsureAccountStoreLoaded();
+                ConfigureLogin();
+
+                var hadToken = AccountSettingsStore.Instance.LoginTokens.ContainsKey(username);
+                var password = hadToken
+                    ? null
+                    : ConsoleRelay.Instance.PromptAndRead($"Enter account password for \"{username}\":");
+
+                if (!hadToken && string.IsNullOrEmpty(password))
+                {
+                    throw new InvalidOperationException("未提供密码,登录终止");
+                }
+
+                AppendLog(hadToken ? $"使用已保存令牌登录账户 {username}…" : $"登录账户 {username}…");
+
+                if (!ContentDownloader.InitializeSteam3(username, password))
+                {
+                    ContentDownloader.ShutdownSteam3();
+
+                    if (hadToken && !AccountSettingsStore.Instance.LoginTokens.ContainsKey(username))
+                    {
+                        AppendLog("已保存令牌失效,请重新输入密码登录…");
+                        password = ConsoleRelay.Instance.PromptAndRead($"Enter account password for \"{username}\":");
+                        if (string.IsNullOrEmpty(password))
+                        {
+                            throw new InvalidOperationException("未提供密码,登录终止");
+                        }
+
+                        if (!ContentDownloader.InitializeSteam3(username, password))
+                        {
+                            throw new InvalidOperationException("Steam 登录失败,请检查账号密码/Steam Guard/网络后重试");
+                        }
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("Steam 登录失败,请检查账号密码/Steam Guard/网络后重试");
+                    }
+                }
+
+                ContentDownloader.ShutdownSteam3();
+
+                lock (_sync)
+                {
+                    _state = _cancelRequested ? "cancelled" : "done";
+                    _percent = 100;
+                    _progressText = _cancelRequested ? "登录已取消" : $"账户 {username} 登录成功,后续下载将自动复用登录状态";
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                lock (_sync)
+                {
+                    _state = "cancelled";
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog(ex.Message);
+                lock (_sync)
+                {
+                    _state = _cancelRequested ? "cancelled" : "error";
+                    _error = ex.Message;
+                }
+            }
+            finally
+            {
+                ContentDownloader.ShutdownSteam3();
+                lock (_sync)
+                {
+                    _busy = false;
+                }
             }
         }
 
@@ -199,8 +353,9 @@ namespace SteamDl.Core
                 }
 
                 EnsureAccountStoreLoaded();
-                Directory.CreateDirectory(_outputDir);
-                ConfigureDownloader(request, _outputDir);
+                ConfigureLogin();
+
+                var baseOutputDir = string.IsNullOrWhiteSpace(request.OutputDir) ? DefaultDownloadDir() : request.OutputDir;
 
                 var username = request.Anonymous || string.IsNullOrWhiteSpace(request.Username)
                     ? null
@@ -229,6 +384,9 @@ namespace SteamDl.Core
                     if (request.Kind == "workshop")
                     {
                         var pubFileId = ulong.Parse(request.Id);
+                        SetOutputDir(Path.Combine(baseOutputDir, "workshop_" + request.Id));
+                        Directory.CreateDirectory(_outputDir);
+                        ConfigureDownloader(request, _outputDir);
                         AppendLog("解析创意工坊物品所属 App…");
                         var appId = await AppInfoService.ResolveWorkshopAppIdAsync(pubFileId).ConfigureAwait(false);
                         AppendLog($"物品属于 App {appId},开始下载…");
@@ -237,6 +395,12 @@ namespace SteamDl.Core
                     else
                     {
                         var appId = uint.Parse(request.Id);
+                        var installDirName = await ResolveAppInstallDirectoryNameAsync(appId).ConfigureAwait(false);
+                        SetOutputDir(Path.Combine(baseOutputDir, installDirName));
+                        Directory.CreateDirectory(_outputDir);
+                        ConfigureDownloader(request, _outputDir);
+                        AppendLog($"使用 Steam 安装目录名: {installDirName}");
+
                         var depots = new List<(uint depotId, ulong manifestId)>();
                         if (uint.TryParse(request.DepotId, out var depotId) && depotId > 0)
                         {
@@ -309,8 +473,19 @@ namespace SteamDl.Core
                 }
 
                 AccountSettingsStore.LoadFromFile("account.config");
+                AppendLogLocked($"Steam 登录状态缓存: {AccountSettingsStore.CurrentFilePath}");
                 _accountStoreLoaded = true;
             }
+        }
+
+        static void ConfigureLogin()
+        {
+            var cfg = ContentDownloader.Config;
+            cfg.RememberPassword = true;
+            cfg.UseQrCode = false;
+            cfg.SkipAppConfirmation = false;
+            cfg.CellID = 0;
+            cfg.LoginID = null;
         }
 
         static void ConfigureDownloader(DownloadRequest request, string installDir)
@@ -332,6 +507,36 @@ namespace SteamDl.Core
             cfg.DownloadAllPlatforms = request.Os == "any";
             cfg.DownloadAllArchs = false;
             cfg.DownloadAllLanguages = false;
+        }
+
+        static async Task<string> ResolveAppInstallDirectoryNameAsync(uint appId)
+        {
+            var installDir = await ContentDownloader.GetAppInstallDirAsync(appId).ConfigureAwait(false);
+            var safe = SanitizePathSegment(installDir);
+            return string.IsNullOrWhiteSpace(safe) ? "app_" + appId : safe;
+        }
+
+        static string SanitizePathSegment(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            var invalid = Path.GetInvalidFileNameChars()
+                .Concat(['<', '>', ':', '"', '/', '\\', '|', '?', '*'])
+                .Distinct()
+                .ToArray();
+            var chars = value.Trim().Select(c => invalid.Contains(c) ? '_' : c).ToArray();
+            return new string(chars).Trim().TrimEnd('.');
+        }
+
+        void SetOutputDir(string outputDir)
+        {
+            lock (_sync)
+            {
+                _outputDir = outputDir;
+            }
         }
 
         void AppendLog(string line)

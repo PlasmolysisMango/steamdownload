@@ -65,11 +65,16 @@ dotnet publish src/SteamDl.Android -c Release
 
 ## 使用说明
 
-- 粘贴商店链接 / steam:// 链接 / AppID → 解析 → 选择账号与平台 → 下载。
+- 粘贴商店链接 / steam:// 链接 / AppID → 解析。
+- 账号模式可二选一：勾选匿名下载（仅限免费/服务器内容），或输入 Steam 用户名后点击“登录”，登录成功后再下载。
 - DLC:账号拥有即随本体一起下载;单独补 DLC 填其 Depot ID（steamdb.info 可查）。
-- 登录只保存 refresh token（DD 的 account.config 机制），密码不落盘。
-- Steam Guard:可直接在 Steam 手机 App 点确认，或在页面输入框提交令牌。
-- 拷贝到 PC:将 `app_<appid>` 内的文件放入 `Steam\steamapps\common\<游戏安装目录名>`，
+- 登录成功后会保存 Steam refresh token 到应用数据目录的 `SteamDl/account.config`，后续同一账号可免密码复用；密码不落盘。
+- Steam Guard:登录或下载过程需要验证时，可直接在 Steam 手机 App 点确认，或在页面输入框提交令牌。
+- 保存目录可点击“选择”调用系统目录选择器：Windows 使用资源管理器目录选择，Android 使用系统文件管理器；如果选择器不可用或路径不可写，可继续手动输入。保存目录会持久化到应用配置中。
+- 下载完成后默认目录会尽量使用 Steam appinfo 的安装目录名（即 `steamapps/common/<游戏安装目录名>` 中的那一段）；如果 Steam 元数据取不到，才回退到 `app_<appid>`。
+- Android 可尝试选择外置存储或 U 盘目录；是否可直接写入取决于系统是否把该目录暴露为可写真实路径（如 `/storage/XXXX-XXXX/...`）以及“所有文件访问”授权。若文件管理器只返回 SAF URI 且无法转换为真实路径，则当前下载引擎无法直接写入，需要手动输入可写挂载路径或先下载到手机存储后再复制。
+- 下载完成后可点击“打开所在位置”；若当前平台/文件管理器不支持自动打开，可按页面显示的目录手动进入。
+- 拷贝到 PC:将下载目录内的文件放入 Steam 库的 `Steam\steamapps\common\<游戏安装目录名>`，
   Steam 里点"安装"会自动发现现有文件并只校验补差。
 
 ## 注意

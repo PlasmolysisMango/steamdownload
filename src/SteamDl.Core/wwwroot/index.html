@@ -37,6 +37,9 @@
   label.check { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 10px 0; }
   .field { margin-bottom: 10px; }
   .field span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .statusline { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.5; word-break: break-all; }
+  .statusline.ok { color: var(--ok); }
+  .statusline.warn { color: var(--warn); }
   #gameCard { display: none; overflow: hidden; padding: 0; }
   #gameCard img { width: 100%; display: block; }
   #gameCard .meta { padding: 12px 14px; }
@@ -91,10 +94,14 @@
 
   <div class="card">
     <h2>2. 账号与选项</h2>
-    <label class="check"><input type="checkbox" id="anonymous"> 匿名登录（仅限免费/服务器内容）</label>
+    <label class="check"><input type="checkbox" id="anonymous"> 匿名下载（仅限免费/服务器内容）</label>
     <div class="field" id="userField">
-      <span>Steam 用户名（密码与令牌稍后在下方安全输入，不会被保存）</span>
-      <input type="text" id="username" autocapitalize="none" autocomplete="username">
+      <span>Steam 用户名（先点击登录；密码与令牌在下方安全输入，不会被保存）</span>
+      <div class="row">
+        <input type="text" id="username" autocapitalize="none" autocomplete="username">
+        <button id="loginBtn" class="secondary">登录</button>
+      </div>
+      <div id="authStatus" class="statusline warn">未登录：可勾选匿名下载，或输入用户名后点击登录。</div>
     </div>
     <div class="field">
       <span>目标平台版本</span>
@@ -109,8 +116,12 @@
       <input type="text" id="depotId" inputmode="numeric" placeholder="例如 731">
     </div>
     <div class="field">
-      <span>保存目录</span>
-      <input type="text" id="outputDir">
+      <span>保存目录（会自动持久化）</span>
+      <div class="row">
+        <input type="text" id="outputDir">
+        <button id="pickDirBtn" class="secondary">选择</button>
+      </div>
+      <div id="dirStatus" class="statusline">可手动输入；选择器不可用时会回退到手动输入。</div>
     </div>
     <button class="block" id="startBtn" disabled>开始下载</button>
   </div>
@@ -131,6 +142,7 @@
     </div>
     <div id="log">日志输出…</div>
     <div class="row" style="margin-top:10px">
+      <button class="secondary" id="openBtn" style="flex:1;display:none">打开所在位置</button>
       <button class="danger" id="cancelBtn" style="flex:1" disabled>取消任务</button>
     </div>
   </div>
@@ -150,6 +162,8 @@
 <script>
 const $ = id => document.getElementById(id);
 let parsed = null;
+let authLoggedIn = false;
+let lastOutputDir = '';
 
 async function api(path, body) {
   const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {};
@@ -162,6 +176,7 @@ async function api(path, body) {
 // -- 初始化配置 --
 api('/api/config').then(cfg => {
   $('outputDir').value = cfg.download_dir;
+  $('dirStatus').textContent = cfg.settings_path ? '配置保存于: ' + cfg.settings_path : '保存目录会自动持久化。';
   if (cfg.engine_ready === false) $('noEngine').style.display = 'block';
 });
 
@@ -191,15 +206,94 @@ $('parseBtn').onclick = async () => {
   }
 };
 
-// -- 匿名切换 --
+// -- 匿名切换与登录 --
+async function refreshAuthStatus() {
+  const username = $('username').value.trim();
+  authLoggedIn = false;
+  if ($('anonymous').checked) {
+    $('authStatus').textContent = '当前使用匿名下载，不需要登录。';
+    $('authStatus').className = 'statusline';
+    return;
+  }
+  if (!username) {
+    $('authStatus').textContent = '未登录：输入 Steam 用户名后点击登录。';
+    $('authStatus').className = 'statusline warn';
+    return;
+  }
+  try {
+    const s = await api('/api/auth/status?username=' + encodeURIComponent(username));
+    authLoggedIn = !!s.logged_in;
+    $('authStatus').textContent = authLoggedIn
+      ? '已登录：后续下载会复用已保存的 Steam 登录状态。'
+      : '未登录：点击登录后在任务状态区域输入密码/Steam Guard。';
+    $('authStatus').className = 'statusline ' + (authLoggedIn ? 'ok' : 'warn');
+  } catch (e) {
+    $('authStatus').textContent = '登录状态检查失败: ' + e.message;
+    $('authStatus').className = 'statusline warn';
+  }
+}
+
 $('anonymous').onchange = () => {
   $('userField').style.display = $('anonymous').checked ? 'none' : 'block';
+  refreshAuthStatus();
 };
+$('username').addEventListener('change', refreshAuthStatus);
+$('username').addEventListener('blur', refreshAuthStatus);
+$('loginBtn').onclick = async () => {
+  const username = $('username').value.trim();
+  if (!username) { alert('请输入 Steam 用户名'); return; }
+  try {
+    await api('/api/login', {username});
+    $('authStatus').textContent = '登录中：请在下方任务状态区域完成密码/Steam Guard 输入。';
+    $('authStatus').className = 'statusline warn';
+  } catch (e) { alert(e.message); }
+};
+
+// -- 保存目录选择与持久化 --
+async function saveDownloadDir() {
+  const path = $('outputDir').value.trim();
+  if (!path) return false;
+  try {
+    const saved = await api('/api/set-download-dir', {path});
+    $('outputDir').value = saved.download_dir || path;
+    $('dirStatus').textContent = '已保存: ' + $('outputDir').value;
+    $('dirStatus').className = 'statusline ok';
+    return true;
+  } catch (e) {
+    $('dirStatus').textContent = e.message + '；可继续手动修改后重试。';
+    $('dirStatus').className = 'statusline warn';
+    return false;
+  }
+}
+
+$('pickDirBtn').onclick = async () => {
+  $('dirStatus').textContent = '正在打开系统目录选择器…';
+  $('dirStatus').className = 'statusline';
+  try {
+    const picked = await api('/api/pick-directory', {});
+    $('outputDir').value = picked.path || picked.download_dir || $('outputDir').value;
+    $('dirStatus').textContent = '已选择并保存: ' + $('outputDir').value;
+    $('dirStatus').className = 'statusline ok';
+  } catch (e) {
+    $('dirStatus').textContent = e.message + '；请手动输入保存目录。';
+    $('dirStatus').className = 'statusline warn';
+  }
+};
+$('outputDir').addEventListener('change', saveDownloadDir);
+$('outputDir').addEventListener('blur', saveDownloadDir);
 
 // -- 开始下载 --
 $('startBtn').onclick = async () => {
   if (!parsed) return;
+  if (!$('anonymous').checked) {
+    await refreshAuthStatus();
+    if (!authLoggedIn) {
+      alert('请先登录 Steam，或勾选匿名下载。');
+      return;
+    }
+  }
   try {
+    if (!(await saveDownloadDir())) return;
     await api('/api/download', {
       kind: parsed.kind, id: parsed.id,
       username: $('username').value,
@@ -224,6 +318,11 @@ $('promptSend').onclick = async () => {
 $('promptInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('promptSend').click(); });
 
 $('cancelBtn').onclick = () => api('/api/cancel', {}).catch(()=>{});
+$('openBtn').onclick = async () => {
+  if (!lastOutputDir) return;
+  try { await api('/api/open-path', {path: lastOutputDir}); }
+  catch (e) { alert(e.message); }
+};
 
 // -- 状态轮询 --
 const STATE_TEXT = {idle:'空闲', starting:'启动中', running:'下载中', waiting_input:'等待输入',
@@ -237,15 +336,24 @@ async function poll() {
     chip.textContent = STATE_TEXT[s.state] || s.state;
     chip.className = 'chip ' + (STATE_CLASS[s.state] || '');
     const active = ['starting','running','waiting_input'].includes(s.state);
+    const isLoginTask = s.kind === 'login';
+    if (isLoginTask && ['starting','running','waiting_input'].includes(s.state)) {
+      chip.textContent = s.state === 'waiting_input' ? '等待登录输入' : '登录中';
+    }
     $('cancelBtn').disabled = !active;
+    $('loginBtn').disabled = active;
     $('startBtn').disabled = !parsed || active;
 
     if (s.state !== 'idle') {
       $('barFill').style.width = (s.percent || 0) + '%';
+      lastOutputDir = s.output_dir || lastOutputDir;
+      const canOpen = s.state === 'done' && !isLoginTask && s.can_open_output && lastOutputDir;
+      $('openBtn').style.display = canOpen ? 'block' : 'none';
       $('progressText').textContent = s.progress_text ||
-        (s.state === 'done' ? '已保存到: ' + s.output_dir : '—');
+        (s.state === 'done' && s.output_dir ? '已保存到: ' + s.output_dir : '—');
       if (s.log) { const el = $('log'); el.textContent = s.log; el.scrollTop = el.scrollHeight; }
       if (s.error) $('progressText').textContent = s.error;
+      if (isLoginTask && s.state === 'done') refreshAuthStatus();
       if (s.state === 'waiting_input') {
         $('promptBox').style.display = 'block';
         $('promptLabel').textContent = s.prompt;

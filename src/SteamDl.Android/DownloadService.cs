@@ -2,6 +2,7 @@
 using Android.App;
 using Android.Content;
 using Android.OS;
+using Android.Widget;
 using SteamDl.Core;
 
 namespace SteamDl.Android
@@ -46,6 +47,7 @@ namespace SteamDl.Android
                 // Console 中继 + 任务管理器接线,再启动本地 HTTP 服务
                 ConsoleRelay.Instance.Install();
                 _ = JobManager.Instance;
+                WebApi.OpenPathHandler = OpenDirectory;
                 new WebApi(Port, "127.0.0.1").Start();
             }
 
@@ -53,6 +55,24 @@ namespace SteamDl.Android
         }
 
         public override IBinder OnBind(Intent intent) => null;
+
+        bool OpenDirectory(string path)
+        {
+            try
+            {
+                var uri = global::Android.Net.Uri.Parse("file://" + path.TrimEnd('/') + "/");
+                var intent = new Intent(Intent.ActionView);
+                intent.SetDataAndType(uri, "resource/folder");
+                intent.AddFlags(ActivityFlags.NewTask | ActivityFlags.GrantReadUriPermission);
+                StartActivity(Intent.CreateChooser(intent, "打开下载目录"));
+                return true;
+            }
+            catch
+            {
+                Toast.MakeText(this, "无法自动打开目录,请在文件管理器中手动进入: " + path, ToastLength.Long)?.Show();
+                return false;
+            }
+        }
 
         void CreateNotificationChannel()
         {
