@@ -64,10 +64,31 @@ function Find-CommandPath([string]$Name) {
 }
 
 function Get-DotnetPath {
+    # 返回可执行 dotnet（可能只是 Runtime），仅用于展示/诊断。
+    if (Test-Path $LocalDotnet) { return $LocalDotnet }
     $system = Find-CommandPath 'dotnet'
     if ($system) { return $system }
-    if (Test-Path $LocalDotnet) { return $LocalDotnet }
     return $LocalDotnet
+}
+
+function Test-DotnetSdk([string]$DotnetPath) {
+    if (-not $DotnetPath) { return $false }
+    if (-not (Test-Path $DotnetPath)) { return $false }
+
+    Set-DotnetEnv
+    $output = & $DotnetPath '--list-sdks' 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    return -not [string]::IsNullOrWhiteSpace(($output | Out-String))
+}
+
+function Get-DotnetSdkPath {
+    # 返回真正具备 SDK 的 dotnet；构建/restore/workload 只能使用这个函数。
+    if ((Test-Path $LocalDotnet) -and (Test-DotnetSdk $LocalDotnet)) { return $LocalDotnet }
+
+    $system = Find-CommandPath 'dotnet'
+    if ($system -and (Test-DotnetSdk $system)) { return $system }
+
+    return $null
 }
 
 function Set-DotnetEnv {
@@ -120,12 +141,17 @@ function Set-AndroidEnv {
 
 function Invoke-Dotnet([string[]]$DotnetArgs) {
     Set-DotnetEnv
-    $dotnet = Get-DotnetPath
-    if (-not (Test-Path $dotnet) -and -not (Find-CommandPath 'dotnet')) {
-        throw 'dotnet 未找到，请先运行 .\build.ps1 install-dotnet'
+    $dotnet = Get-DotnetSdkPath
+    if (-not $dotnet) {
+        throw "未找到可用的 .NET SDK。检测到系统 dotnet 时也可能只是 Runtime。请运行 .\build.ps1 install-dotnet 安装本地 SDK。"
     }
+
+    Write-Host "> $dotnet $($DotnetArgs -join ' ')" -ForegroundColor DarkGray
     & $dotnet @DotnetArgs
-    if ($LASTEXITCODE -ne 0) { throw "dotnet 命令失败: dotnet $($DotnetArgs -join ' ')" }
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "dotnet 命令失败(ExitCode=$exitCode)`n路径: $dotnet`n命令: dotnet $($DotnetArgs -join ' ')"
+    }
 }
 
 function Download-File([string]$Url, [string]$OutFile) {
@@ -161,15 +187,22 @@ Notes:
 function Install-Dotnet {
     Ensure-Dir $ToolsDir
     $system = Find-CommandPath 'dotnet'
-    if ($system) {
-        Write-Host "使用系统 dotnet: $system"
+    if ($system -and (Test-DotnetSdk $system)) {
+        Write-Host "使用系统 dotnet SDK: $system"
         Invoke-Dotnet @('--version')
         return
     }
+    if ($system) {
+        Write-Host "检测到系统 dotnet 但没有可用 SDK，将安装项目本地 .NET SDK: $system" -ForegroundColor Yellow
+    }
     if (Test-Path $LocalDotnet) {
-        Write-Host "使用本地 dotnet: $LocalDotnet"
-        Invoke-Dotnet @('--version')
-        return
+        if (Test-DotnetSdk $LocalDotnet) {
+            Write-Host "使用本地 dotnet SDK: $LocalDotnet"
+            Invoke-Dotnet @('--version')
+            return
+        }
+        Write-Host "本地 dotnet 存在但不可用，将重新安装: $LocalDotnet" -ForegroundColor Yellow
+        Remove-Item $LocalDotnetDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     Write-Section "安装 .NET SDK $DotnetChannel 到 $LocalDotnetDir"
@@ -244,7 +277,13 @@ function Install-AndroidSdk {
 function Install-Workload {
     Install-Dotnet
     Write-Section '安装/还原 .NET Android workload'
-    Invoke-Dotnet @('workload', 'restore', $AndroidProject)
+    try {
+        Invoke-Dotnet @('workload', 'restore', $AndroidProject)
+    } catch {
+        Write-Host "dotnet workload restore 失败，尝试 fallback: dotnet workload install android" -ForegroundColor Yellow
+        Write-Host $_.Exception.Message -ForegroundColor Yellow
+        Invoke-Dotnet @('workload', 'install', 'android')
+    }
 }
 
 function Restore-Server {
@@ -298,6 +337,24 @@ function Clean-Project {
     Write-Host '已清理构建产物'
 }
 
+function Show-DotnetCandidate([string]$Label, [string]$Path) {
+    if (-not $Path -or -not (Test-Path $Path)) {
+        Write-Host "${Label}: 未找到"
+        return
+    }
+
+    Write-Host "${Label}: $Path"
+    Set-DotnetEnv
+    & $Path '--info'
+    $sdks = & $Path '--list-sdks' 2>$null
+    if ([string]::IsNullOrWhiteSpace(($sdks | Out-String))) {
+        Write-Host "$Label SDK: 未找到（这通常表示只安装了 .NET Runtime，不能构建项目）" -ForegroundColor Yellow
+    } else {
+        Write-Host "$Label SDK:" -ForegroundColor Green
+        $sdks | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Doctor {
     Write-Section 'System'
     Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
@@ -309,8 +366,15 @@ function Doctor {
     } catch { }
 
     Write-Section '.NET'
-    $dotnet = Get-DotnetPath
-    if ((Test-Path $dotnet) -or (Find-CommandPath 'dotnet')) { Invoke-Dotnet @('--info') } else { Write-Host 'dotnet 未找到: 运行 .\build.ps1 install-dotnet' }
+    Show-DotnetCandidate '本地 dotnet' $LocalDotnet
+    $systemDotnet = Find-CommandPath 'dotnet'
+    Show-DotnetCandidate '系统 dotnet' $systemDotnet
+    $sdkDotnet = Get-DotnetSdkPath
+    if ($sdkDotnet) {
+        Write-Host "将用于构建的 dotnet SDK: $sdkDotnet" -ForegroundColor Green
+    } else {
+        Write-Host "未找到可用于构建的 .NET SDK。请运行 .\build.ps1 install-dotnet" -ForegroundColor Yellow
+    }
 
     Write-Section 'Java'
     $javaHome = Get-JavaHome
