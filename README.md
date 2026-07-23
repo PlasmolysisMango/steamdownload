@@ -38,27 +38,20 @@ make build-apk CONFIG=Release ANDROID_API=35 ANDROID_BUILD_TOOLS=35.0.0
 
 `make install-deps` 会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`，不污染系统全局环境。
 
-## Windows PowerShell 一键命令
+## Windows Node.js 一键命令
 
-Windows 原生环境推荐使用根目录 [build.ps1](file:///root/workspace/project/steamdownload/build.ps1)：
-
-```powershell
-.\build.ps1 doctor        # 检查 dotnet/java/Android SDK 环境
-.\build.ps1 install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
-.\build.ps1 build         # 构建桌面服务端
-.\build.ps1 run -Port 8630
-.\build.ps1 build-apk     # 构建 Android APK，输出到 artifacts\apk
-.\build.ps1 clean
-```
-
-首次运行如果 PowerShell 执行策略阻止脚本，可在项目目录执行：
+Windows 原生环境推荐使用根目录 [build.mjs](file:///root/workspace/project/steamdownload/build.mjs)。先安装 Node.js LTS（官网安装包或 `winget install OpenJS.NodeJS.LTS`），然后执行：
 
 ```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\build.ps1 doctor
+node .\build.mjs doctor        # 检查 dotnet/java/Android SDK 环境
+node .\build.mjs install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
+node .\build.mjs build         # 构建桌面服务端
+node .\build.mjs run --port=8630
+node .\build.mjs build-apk     # 构建 Android APK，输出到 artifacts\apk
+node .\build.mjs clean
 ```
 
-`build.ps1` 会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools\`。
+`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools\`。
 
 ## 桌面运行（已在 Linux 验证）
 
