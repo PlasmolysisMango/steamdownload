@@ -17,47 +17,34 @@ external/
 └── DepotDownloader/    # 上游源码,零修改(Program/Ansi 等由 Core/Shims 替身实现替代)
 ```
 
-## Makefile 一键命令
+## Node.js 一键命令
 
-推荐在 Linux/macOS/WSL 开发机上直接使用根目录 `Makefile`：
-
-```bash
-make doctor        # 检查 dotnet/java/Android SDK 环境
-make install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
-make build         # 构建桌面服务端
-make run           # 运行 Web UI，默认 http://127.0.0.1:8630
-make build-apk     # 构建 Android APK，输出到 artifacts/apk
-```
-
-可覆盖常用变量：
+所有平台统一使用根目录 [build.mjs](file:///root/workspace/project/steamdownload/build.mjs)。先安装 Node.js LTS：Windows 可用官网安装包或 `winget install OpenJS.NodeJS.LTS`，Linux/macOS 可用系统包管理器或 Node.js 官网安装包。
 
 ```bash
-make run PORT=9000
-make build-apk CONFIG=Release ANDROID_API=35 ANDROID_BUILD_TOOLS=35.0.0
+node build.mjs doctor        # 检查 dotnet/java/Android SDK 环境
+node build.mjs install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
+node build.mjs build         # 构建桌面服务端
+node build.mjs run --port=8630
+node build.mjs build-apk     # 构建 Android APK，输出到 artifacts/apk
+node build.mjs clean
 ```
 
-`make install-deps` 会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`，不污染系统全局环境。
+可覆盖常用参数：
 
-## Windows Node.js 一键命令
-
-Windows 原生环境推荐使用根目录 [build.mjs](file:///root/workspace/project/steamdownload/build.mjs)。先安装 Node.js LTS（官网安装包或 `winget install OpenJS.NodeJS.LTS`），然后执行：
-
-```powershell
-node .\build.mjs doctor        # 检查 dotnet/java/Android SDK 环境
-node .\build.mjs install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
-node .\build.mjs build         # 构建桌面服务端
-node .\build.mjs run --port=8630
-node .\build.mjs build-apk     # 构建 Android APK，输出到 artifacts\apk
-node .\build.mjs clean
+```bash
+node build.mjs run --port=9000
+node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0
+node build.mjs build-apk --nuget-source=https://api.nuget.org/v3/index.json
 ```
 
-`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools\`。NuGet 源默认使用 `https://api.nuget.org/v3/index.json`，如果你的网络需要镜像，可以追加 `--nuget-source=<URL>` 或设置环境变量 `NUGET_SOURCE`。
+`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`。NuGet 源默认使用 `https://api.nuget.org/v3/index.json`，如果你的网络需要镜像，可以追加 `--nuget-source=<URL>` 或设置环境变量 `NUGET_SOURCE`。
 
 ## 桌面运行（已在 Linux 验证）
 
 ```bash
-make run
-# 或者不用 Makefile:
+node build.mjs run --port=8630
+# 或者直接运行 .NET 项目:
 dotnet run --project src/SteamDl.Server   # 浏览器打开 http://127.0.0.1:8630
 ```
 
@@ -66,10 +53,10 @@ dotnet run --project src/SteamDl.Server   # 浏览器打开 http://127.0.0.1:863
 需要:.NET 9 SDK、JDK 17、Android SDK（装过 Android Studio 即有）。
 
 ```bash
-make install-deps
-make build-apk
-# 或者不用 Makefile:
-dotnet workload restore src/SteamDl.Android
+node build.mjs install-deps
+node build.mjs build-apk
+# 或者直接运行 .NET 命令:
+dotnet workload restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
 dotnet publish src/SteamDl.Android -c Release
 ```
 
