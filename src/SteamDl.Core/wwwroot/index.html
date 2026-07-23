@@ -102,6 +102,13 @@
         <button id="loginBtn" class="secondary">登录</button>
       </div>
       <div id="authStatus" class="statusline warn">未登录：可勾选匿名下载，或输入用户名后点击登录。</div>
+      <div id="promptBox">
+        <div id="promptLabel"></div>
+        <div class="row">
+          <input type="password" id="promptInput" autocapitalize="none">
+          <button id="promptSend">提交</button>
+        </div>
+      </div>
     </div>
     <div class="field">
       <span>目标平台版本</span>
@@ -133,13 +140,6 @@
     </div>
     <div class="bar"><i id="barFill"></i></div>
     <div id="progressText">—</div>
-    <div id="promptBox">
-      <div id="promptLabel"></div>
-      <div class="row">
-        <input type="password" id="promptInput" autocapitalize="none">
-        <button id="promptSend">提交</button>
-      </div>
-    </div>
     <div id="log">日志输出…</div>
     <div class="row" style="margin-top:10px">
       <button class="secondary" id="openBtn" style="flex:1;display:none">打开所在位置</button>
@@ -225,7 +225,7 @@ async function refreshAuthStatus() {
     authLoggedIn = !!s.logged_in;
     $('authStatus').textContent = authLoggedIn
       ? '已登录：后续下载会复用已保存的 Steam 登录状态。'
-      : '未登录：点击登录后在任务状态区域输入密码/Steam Guard。';
+      : '未登录：点击登录后在用户名下方输入密码/Steam Guard。';
     $('authStatus').className = 'statusline ' + (authLoggedIn ? 'ok' : 'warn');
   } catch (e) {
     $('authStatus').textContent = '登录状态检查失败: ' + e.message;
@@ -244,7 +244,7 @@ $('loginBtn').onclick = async () => {
   if (!username) { alert('请输入 Steam 用户名'); return; }
   try {
     await api('/api/login', {username});
-    $('authStatus').textContent = '登录中：请在下方任务状态区域完成密码/Steam Guard 输入。';
+    $('authStatus').textContent = '登录中：请在用户名下方完成密码/Steam Guard 输入。';
     $('authStatus').className = 'statusline warn';
   } catch (e) { alert(e.message); }
 };
