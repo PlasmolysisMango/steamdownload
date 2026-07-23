@@ -129,7 +129,8 @@ function Invoke-Dotnet([string[]]$DotnetArgs) {
 }
 
 function Download-File([string]$Url, [string]$OutFile) {
-    Ensure-Dir (Split-Path -Parent $OutFile)
+    $outDir = Split-Path -Parent $OutFile
+    Ensure-Dir -Path $outDir
     Write-Host "下载: $Url"
     try {
         Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
@@ -207,18 +208,21 @@ function Install-Jdk {
 
 function Install-AndroidSdk {
     Install-Jdk
-    Ensure-Dir (Join-Path $AndroidSdkRoot 'cmdline-tools')
+    $cmdlineToolsDir = Join-Path $AndroidSdkRoot 'cmdline-tools'
+    Ensure-Dir -Path $cmdlineToolsDir
     if (-not (Test-Path $SdkManager)) {
         Write-Section "安装 Android cmdline-tools 到 $AndroidSdkRoot"
         $zip = Join-Path $ToolsDir 'commandlinetools-win.zip'
         $url = 'https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip'
         Download-File $url $zip
         $tmp = Join-Path $ToolsDir 'cmdline-tools-tmp'
+        $latestToolsDir = Join-Path $AndroidSdkRoot 'cmdline-tools\latest'
         Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item (Join-Path $AndroidSdkRoot 'cmdline-tools\latest') -Recurse -Force -ErrorAction SilentlyContinue
-        Ensure-Dir $tmp
+        Remove-Item $latestToolsDir -Recurse -Force -ErrorAction SilentlyContinue
+        Ensure-Dir -Path $tmp
         Expand-Archive -Path $zip -DestinationPath $tmp -Force
-        Move-Item (Join-Path $tmp 'cmdline-tools') (Join-Path $AndroidSdkRoot 'cmdline-tools\latest')
+        $extractedToolsDir = Join-Path $tmp 'cmdline-tools'
+        Move-Item -Path $extractedToolsDir -Destination $latestToolsDir
         Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 
@@ -277,7 +281,7 @@ function Publish-Server {
 function Build-Apk {
     Restore-Android
     Remove-Item $ApkOut -Recurse -Force -ErrorAction SilentlyContinue
-    Ensure-Dir $ApkOut
+    Ensure-Dir -Path $ApkOut
     Set-AndroidEnv
     Invoke-Dotnet @('publish', $AndroidProject, '-c', $Config, '-p:AndroidPackageFormat=apk')
     Get-ChildItem (Join-Path $Root "src\SteamDl.Android\bin\$Config") -Recurse -Filter '*.apk' |
