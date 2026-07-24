@@ -221,31 +221,46 @@ async function installDotnet() {
   dotnet(['--version']);
 }
 
-function getJavaExe() {
-  const local = path.join(localJdkDir, 'bin', isWin ? 'java.exe' : 'java');
-  if (exists(local)) return local;
-  return executable('java') || local;
+function javaTool(home, name) {
+  return path.join(home, 'bin', isWin ? `${name}.exe` : name);
+}
+
+function resolveJavaHomeFromExe(javaExe) {
+  const realJava = fs.realpathSync(javaExe);
+  return path.dirname(path.dirname(realJava));
+}
+
+function hasJdkHome(home) {
+  return !!home
+    && exists(javaTool(home, 'java'))
+    && exists(javaTool(home, 'jar'))
+    && exists(javaTool(home, 'keytool'));
 }
 
 function getJavaHome() {
-  const localJava = path.join(localJdkDir, 'bin', isWin ? 'java.exe' : 'java');
-  if (exists(localJava)) return localJdkDir;
-  if (process.env.JAVA_HOME) {
-    const java = path.join(process.env.JAVA_HOME, 'bin', isWin ? 'java.exe' : 'java');
-    if (exists(java)) return process.env.JAVA_HOME;
-  }
+  const candidates = [localJdkDir];
+  if (process.env.JAVA_HOME) candidates.push(process.env.JAVA_HOME);
   const java = executable('java');
-  if (java) return path.dirname(path.dirname(java));
+  if (java) candidates.push(resolveJavaHomeFromExe(java));
+
+  for (const candidate of candidates) {
+    if (hasJdkHome(candidate)) return candidate;
+  }
   return localJdkDir;
 }
 
+function getJavaExe() {
+  const java = javaTool(getJavaHome(), 'java');
+  if (exists(java)) return java;
+  return executable('java') || javaTool(localJdkDir, 'java');
+}
+
 function getKeytool() {
-  return path.join(getJavaHome(), 'bin', isWin ? 'keytool.exe' : 'keytool');
+  return javaTool(getJavaHome(), 'keytool');
 }
 
 function hasJava() {
-  const java = getJavaExe();
-  return exists(java);
+  return hasJdkHome(getJavaHome());
 }
 
 async function installJdk() {

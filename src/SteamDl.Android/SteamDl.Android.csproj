@@ -20,9 +20,9 @@
 
   <!-- protobuf-net/SteamKit2 依赖反射,禁止裁剪器移除其成员,否则 Release 包登录/存档会失败 -->
   <ItemGroup>
-    <TrimmerRootAssembly Include="SteamDl.Core" />
-    <TrimmerRootAssembly Include="SteamKit2" />
-    <TrimmerRootAssembly Include="protobuf-net" />
-    <TrimmerRootAssembly Include="protobuf-net.Core" />
+    <TrimmerRootAssembly Include="SteamDl.Core" RootMode="All" />
+    <TrimmerRootAssembly Include="SteamKit2" RootMode="All" />
+    <TrimmerRootAssembly Include="protobuf-net" RootMode="All" />
+    <TrimmerRootAssembly Include="protobuf-net.Core" RootMode="All" />
   </ItemGroup>
 </Project>

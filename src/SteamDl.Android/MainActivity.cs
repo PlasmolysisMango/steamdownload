@@ -9,7 +9,6 @@ using Android.OS;
 using Android.Provider;
 using Android.Views;
 using Android.Webkit;
-using AndroidX.Activity;
 using SteamDl.Core;
 
 namespace SteamDl.Android
@@ -20,7 +19,7 @@ namespace SteamDl.Android
         ConfigurationChanges = global::Android.Content.PM.ConfigChanges.Orientation
                              | global::Android.Content.PM.ConfigChanges.ScreenSize
                              | global::Android.Content.PM.ConfigChanges.UiMode)]
-    public class MainActivity : ComponentActivity
+    public class MainActivity : Activity
     {
         const int PickDirectoryRequest = 2001;
         WebView _webView;
@@ -33,7 +32,7 @@ namespace SteamDl.Android
             RequestRuntimePermissions();
 
             // 先拉起前台服务(内含 HTTP 服务),再加载页面
-            var intent = new Intent(this, typeof(DownloadService));
+            var intent = new Intent(this, typeof(global::SteamDl.Android.DownloadService));
             if (Build.VERSION.SdkInt >= BuildVersionCodes.O)
             {
                 StartForegroundService(intent);
@@ -52,7 +51,7 @@ namespace SteamDl.Android
 
             // 给服务一点启动时间后加载;失败时页面下拉刷新即可
             _webView.PostDelayed(() =>
-                _webView.LoadUrl($"http://127.0.0.1:{DownloadService.Port}/"), 600);
+                _webView.LoadUrl($"http://127.0.0.1:{(global::SteamDl.Android.DownloadService.Port)}/"), 600);
         }
 
         void RequestRuntimePermissions()
