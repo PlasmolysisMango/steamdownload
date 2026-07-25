@@ -35,10 +35,10 @@ node build.mjs clean
 ```bash
 node build.mjs run --port=9000
 node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0
-node build.mjs build-apk --nuget-source=https://api.nuget.org/v3/index.json
+node build.mjs build-apk --nuget-source=https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json
 ```
 
-`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`。NuGet 源默认使用 `https://api.nuget.org/v3/index.json`，如果你的网络需要镜像，可以追加 `--nuget-source=<URL>` 或设置环境变量 `NUGET_SOURCE`。
+`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`。NuGet 源默认使用国内源优先（华为云 NuGet，官方源兜底），npm registry 默认使用 `https://registry.npmmirror.com`；如果你的网络需要自定义镜像，可以追加 `--nuget-source=<URL[,URL...]>` / `--npm-registry=<URL>` 或设置环境变量 `NUGET_SOURCE` / `NPM_REGISTRY`。
 
 ## 桌面运行（已在 Linux 验证）
 
@@ -73,8 +73,8 @@ node build.mjs build-apk --config=Release --keystore=/path/steamdl-release.keyst
 # 也可以用环境变量传入正式签名配置
 ANDROID_KEYSTORE=/path/steamdl-release.keystore ANDROID_KEY_ALIAS=steamdl ANDROID_STORE_PASS=你的密码 ANDROID_KEY_PASS=你的密码 node build.mjs build-apk --config=Release
 
-# 网络或 NuGet 配置异常时，显式指定 NuGet 官方源
-node build.mjs build-apk --nuget-source=https://api.nuget.org/v3/index.json
+# 网络或 NuGet 配置异常时，显式指定 NuGet 源列表（逗号分隔，前面的源优先）
+node build.mjs build-apk --nuget-source=https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json
 
 # 清理 bin/obj/artifacts
 node build.mjs clean
@@ -86,7 +86,8 @@ node build.mjs clean
 --config=Release
 --android-api=35
 --android-build-tools=35.0.0
---nuget-source=https://api.nuget.org/v3/index.json
+--nuget-source=https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json
+--npm-registry=https://registry.npmmirror.com
 ANDROID_SDK_ROOT=.tools/android-sdk（未设置系统 ANDROID_SDK_ROOT/ANDROID_HOME 时）
 APK 输出目录=artifacts/apk
 Release keystore 默认路径=.tools/keystore/steamdl-release.keystore
@@ -99,8 +100,8 @@ Release key alias 默认值=steamdl
 1. 确认可用 .NET 9 SDK；没有则安装到 .tools/dotnet 或 .tools/dotnet-win
 2. 安装/复用 JDK 17
 3. 安装/复用 Android cmdline-tools、platform-tools、platforms;android-<api>、build-tools;<version>
-4. 执行 dotnet workload restore src/SteamDl.Android --source <nuget-source>
-5. 执行 dotnet restore src/SteamDl.Android --source <nuget-source>
+4. 执行 dotnet workload restore src/SteamDl.Android --source <nuget-source...>
+5. 执行 dotnet restore src/SteamDl.Android --source <nuget-source...>
 6. Release 构建时确认 keystore：未指定则自动生成并复用 `.tools/keystore/steamdl-release.keystore`
 7. 执行 dotnet publish src/SteamDl.Android -c <config> -p:AndroidPackageFormat=apk，并显式传入 AndroidSdkDirectory/JavaSdkDirectory；Release 时额外传入 AndroidKeyStore/AndroidSigning* 参数
 8. 将生成的 .apk 复制到 artifacts/apk
@@ -111,8 +112,8 @@ Release key alias 默认值=steamdl
 如果不用脚本，等价核心命令大致是：
 
 ```bash
-dotnet workload restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
-dotnet restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
+dotnet workload restore src/SteamDl.Android --source https://repo.huaweicloud.com/repository/nuget/v3/index.json --source https://api.nuget.org/v3/index.json
+dotnet restore src/SteamDl.Android --source https://repo.huaweicloud.com/repository/nuget/v3/index.json --source https://api.nuget.org/v3/index.json
 dotnet publish src/SteamDl.Android -c Release -p:AndroidPackageFormat=apk -p:AndroidSdkDirectory=<Android SDK路径> -p:JavaSdkDirectory=<JDK路径> -p:AndroidKeyStore=true -p:AndroidSigningKeyStore=<keystore路径> -p:AndroidSigningKeyAlias=steamdl -p:AndroidSigningStorePass=<密码> -p:AndroidSigningKeyPass=<密码>
 ```
 

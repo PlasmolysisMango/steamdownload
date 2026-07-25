@@ -1,5 +1,4 @@
-// 下载任务管理器:单任务状态机,与前端 /api/status 状态契约保持一致
-// (state/prompt/percent/log 等字段名与取值均对齐,前端零改动)。
+// 下载任务管理器:SQLite 持久化单任务队列,兼容旧 /api/status 契约。
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -7,6 +6,7 @@ using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using DepotDownloader;
+using SteamKit2;
 
 namespace SteamDl.Core
 {
@@ -21,9 +21,15 @@ namespace SteamDl.Core
         public string OutputDir { get; set; }
     }
 
-    public sealed class LoginRequest
+    public sealed class LoginState
     {
         public string Username { get; set; }
+        public string State { get; set; } = "idle";
+        public string Prompt { get; set; } = "";
+        public bool PromptSecret { get; set; }
+        public string Error { get; set; } = "";
+        public string Log { get; set; } = "";
+        public bool RememberPassword { get; set; }
     }
 
     public sealed class JobManager
@@ -33,19 +39,12 @@ namespace SteamDl.Core
         const int MaxLogLines = 400;
 
         readonly object _sync = new();
-        readonly List<string> _log = [];
-        string _state = "idle";
-        string _kind = "";
-        string _id = "";
-        string _prompt = "";
-        bool _promptSecret;
-        double _percent;
-        string _progressText = "";
-        string _error = "";
-        string _outputDir = "";
+        readonly JobStore _store = JobStore.Instance;
+        string _currentJobId;
         bool _busy;
         bool _cancelRequested;
         bool _accountStoreLoaded;
+        LoginState _login = new();
 
         JobManager()
         {
@@ -55,21 +54,44 @@ namespace SteamDl.Core
             {
                 lock (_sync)
                 {
-                    _state = "waiting_input";
-                    _prompt = string.IsNullOrEmpty(prompt) ? "请输入:" : prompt;
-                    _promptSecret = _prompt.Contains("password", StringComparison.OrdinalIgnoreCase) ||
-                                    _prompt.Contains("密码");
+                    var label = string.IsNullOrEmpty(prompt) ? "请输入:" : prompt;
+                    var secret = label.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+                                 label.Contains("密码");
+                    if (!string.IsNullOrWhiteSpace(_currentJobId))
+                    {
+                        _store.UpdateState(_currentJobId, "waiting_input", prompt: label, promptSecret: secret);
+                        return;
+                    }
+
+                    if (_login.State == "running")
+                    {
+                        _login.State = "waiting_input";
+                        _login.Prompt = label;
+                        _login.PromptSecret = secret;
+                    }
                 }
             };
             relay.InputSatisfied += () =>
             {
                 lock (_sync)
                 {
-                    if (_state == "waiting_input")
+                    if (!string.IsNullOrWhiteSpace(_currentJobId))
                     {
-                        AppendLogLocked(_prompt + " ******");
-                        _state = "running";
-                        _prompt = "";
+                        var job = _store.GetJob(_currentJobId);
+                        if (job?.State == "waiting_input")
+                        {
+                            _store.AddLog(_currentJobId, job.Prompt + " ******", MaxLogLines);
+                            _store.UpdateState(_currentJobId, "running", prompt: "", promptSecret: false);
+                        }
+                        return;
+                    }
+
+                    if (_login.State == "waiting_input")
+                    {
+                        AppendLoginLog(_login.Prompt + " ******");
+                        _login.State = "running";
+                        _login.Prompt = "";
+                        _login.PromptSecret = false;
                     }
                 }
             };
@@ -77,45 +99,39 @@ namespace SteamDl.Core
             {
                 lock (_sync)
                 {
-                    if (total > 0)
-                    {
-                        _percent = Math.Min(100.0, downloaded * 100.0 / total);
-                        _progressText = $"{FormatBytes(downloaded)} / {FormatBytes(total)}  ({_percent:0.0}%)";
-                    }
+                    if (total <= 0 || string.IsNullOrWhiteSpace(_currentJobId)) return;
+                    var percent = Math.Min(100.0, downloaded * 100.0 / total);
+                    var text = $"{FormatBytes(downloaded)} / {FormatBytes(total)}  ({percent:0.0}%)";
+                    _store.UpdateState(_currentJobId, "running", percent: percent, progressText: text);
                 }
             };
+
+            RecoverInterruptedJobs();
         }
 
-        public static string DefaultDownloadDir()
+        public static string DefaultDownloadDir() => AppPaths.DefaultDownloadDir();
+
+        public bool TryStart(DownloadRequest request, out string error)
         {
-            return AppSettings.GetDownloadDir(DefaultDownloadDirFallback());
+            var job = TryStart(request, out error, out _);
+            return job;
         }
 
-        static string DefaultDownloadDirFallback()
+        public bool TryStart(DownloadRequest request, out string error, out JobRecord job)
         {
-            foreach (var path in new[] { "/sdcard/Download", "/storage/emulated/0/Download" })
+            job = null;
+            error = Validate(request);
+            if (error != null) return false;
+
+            if (!request.Anonymous && !IsLoggedIn(request.Username))
             {
-                if (Directory.Exists(path))
+                if (TryStartSavedPasswordLogin(request.Username, out var loginError))
                 {
-                    return Path.Combine(path, "steamdl");
+                    error = "登录已失效，已自动尝试重新登录。请到账号页面完成可能需要的 Guard/2FA 验证后再开始下载。";
+                    return false;
                 }
-            }
 
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "steamdl");
-        }
-
-        public static string SetDefaultDownloadDir(string path)
-        {
-            AppSettings.SetDownloadDir(path);
-            return DefaultDownloadDir();
-        }
-
-        public bool TryLogin(LoginRequest request, out string error)
-        {
-            var username = request?.Username?.Trim();
-            if (string.IsNullOrWhiteSpace(username))
-            {
-                error = "请输入 Steam 用户名";
+                error = loginError ?? "请先在账号页面完成登录";
                 return false;
             }
 
@@ -127,44 +143,16 @@ namespace SteamDl.Core
                     return false;
                 }
 
-                _busy = true;
-                _cancelRequested = false;
-                _state = "starting";
-                _kind = "login";
-                _id = username;
-                _prompt = "";
-                _promptSecret = false;
-                _percent = 0;
-                _progressText = "";
-                _error = "";
-                _outputDir = "";
-                _log.Clear();
+                var outputDir = ResolveOutputDir(request);
+                job = _store.CreateJob(request, outputDir);
+                StartJobLocked(job);
+                return true;
             }
+        }
 
-            ConsoleRelay.Instance.DrainPendingInput();
-            Task.Run(() => RunLoginAsync(username));
+        public bool Retry(string jobId, out string error)
+        {
             error = null;
-            return true;
-        }
-
-        public JsonObject AuthStatus(string username)
-        {
-            EnsureAccountStoreLoaded();
-            username = username?.Trim();
-            var loggedIn = !string.IsNullOrWhiteSpace(username) &&
-                AccountSettingsStore.Instance.LoginTokens.ContainsKey(username);
-
-            return new JsonObject
-            {
-                ["logged_in"] = loggedIn,
-                ["username"] = username ?? "",
-                ["account_config"] = AccountSettingsStore.CurrentFilePath ?? "",
-            };
-        }
-
-
-        public bool TryStart(DownloadRequest request, out string error)
-        {
             lock (_sync)
             {
                 if (_busy)
@@ -173,189 +161,436 @@ namespace SteamDl.Core
                     return false;
                 }
 
-                if (!ulong.TryParse(request.Id, out _))
+                var job = _store.GetJob(jobId);
+                if (job == null)
                 {
-                    error = "无效的 AppID/物品 ID";
+                    error = "任务不存在";
                     return false;
                 }
 
-                _busy = true;
-                _cancelRequested = false;
-                _state = "starting";
-                _kind = request.Kind;
-                _id = request.Id;
-                _prompt = "";
-                _promptSecret = false;
-                _percent = 0;
-                _progressText = "";
-                _error = "";
-                _log.Clear();
-                _outputDir = Path.Combine(
-                    string.IsNullOrWhiteSpace(request.OutputDir) ? DefaultDownloadDir() : request.OutputDir,
-                    request.Kind == "workshop" ? "workshop_" + request.Id : "app_" + request.Id);
+                StartJobLocked(job);
+                return true;
             }
-
-            ConsoleRelay.Instance.DrainPendingInput();
-            Task.Run(() => RunAsync(request));
-            error = null;
-            return true;
         }
 
-        public bool SupplyInput(string answer)
+        public void RecoverInterruptedJobs()
         {
             lock (_sync)
             {
-                if (_state != "waiting_input")
-                {
-                    return false;
-                }
+                if (_busy) return;
+                var job = _store.GetRecoverableJobs().FirstOrDefault();
+                if (job == null) return;
+                _store.AddLog(job.JobId, "检测到可恢复任务,服务启动后自动继续…", MaxLogLines);
+                StartJobLocked(job);
             }
+        }
 
+        void StartJobLocked(JobRecord job)
+        {
+            _busy = true;
+            _cancelRequested = false;
+            _currentJobId = job.JobId;
+            _store.UpdateState(job.JobId, "starting", percent: 0, progressText: "", error: "", prompt: "", promptSecret: false);
+            ConsoleRelay.Instance.DrainPendingInput();
+            Task.Run(() => RunAsync(job.JobId));
+        }
+
+        public bool SupplyInput(string answer) => SupplyInput(_currentJobId, answer);
+
+        public bool SupplyInput(string jobId, string answer)
+        {
+            var job = _store.GetJob(jobId);
+            if (job?.State != "waiting_input") return false;
             ConsoleRelay.Instance.SupplyInput(answer);
             return true;
         }
 
-        public void Cancel()
+        public void Cancel() => Cancel(_currentJobId);
+
+        public bool Cancel(string jobId)
         {
             lock (_sync)
             {
-                if (!_busy)
+                if (string.IsNullOrWhiteSpace(jobId)) return false;
+                var job = _store.GetJob(jobId);
+                if (job == null) return false;
+
+                if (jobId == _currentJobId && _busy)
                 {
-                    return;
+                    _cancelRequested = true;
+                    _store.UpdateState(jobId, "cancelled", error: "用户取消任务");
+                    ConsoleRelay.Instance.SupplyInput(string.Empty);
+                    Task.Run(ContentDownloader.ShutdownSteam3);
+                    return true;
                 }
 
-                _cancelRequested = true;
+                _store.UpdateState(jobId, "cancelled", error: "用户取消任务");
+                return true;
             }
-
-            // 若正阻塞在输入上,先放行,再断开会话使下载流程尽快抛出异常终止
-            ConsoleRelay.Instance.SupplyInput(string.Empty);
-            Task.Run(ContentDownloader.ShutdownSteam3);
         }
 
         public JsonObject Status()
         {
-            lock (_sync)
+            var jobId = _currentJobId;
+            if (string.IsNullOrWhiteSpace(jobId))
             {
-                if (_state == "idle")
-                {
-                    return new JsonObject { ["state"] = "idle" };
-                }
+                var latest = _store.ListJobs(limit: 1).FirstOrDefault();
+                if (latest == null) return new JsonObject { ["state"] = "idle" };
+                return _store.ToJson(latest, includeLog: true);
+            }
 
-                var tail = _log.Count > 120 ? _log.GetRange(_log.Count - 120, 120) : _log;
+            var job = _store.GetJob(jobId);
+            return job == null ? new JsonObject { ["state"] = "idle" } : _store.ToJson(job, includeLog: true);
+        }
+
+        public JsonArray JobsJson(string state = null)
+        {
+            var arr = new JsonArray();
+            foreach (var job in _store.ListJobs(state))
+            {
+                arr.Add(_store.ToJson(job));
+            }
+            return arr;
+        }
+
+        public JsonObject JobJson(string jobId)
+        {
+            var job = _store.GetJob(jobId);
+            return _store.ToJson(job, includeLog: true);
+        }
+
+        public List<string> Accounts()
+        {
+            EnsureAccountStoreLoaded();
+            return AccountSettingsStore.Instance.LoginTokens.Keys.OrderBy(x => x).ToList();
+        }
+
+        public JsonArray AccountDetailsJson()
+        {
+            EnsureAccountStoreLoaded();
+            var arr = new JsonArray();
+            var records = _store.ListAccounts().ToDictionary(x => x.Username, StringComparer.OrdinalIgnoreCase);
+            foreach (var username in Accounts())
+            {
+                if (!records.ContainsKey(username)) _store.TouchAccount(username);
+            }
+
+            records = _store.ListAccounts().ToDictionary(x => x.Username, StringComparer.OrdinalIgnoreCase);
+            foreach (var record in records.Values.OrderBy(x => x.Username))
+            {
+                arr.Add(new JsonObject
+                {
+                    ["username"] = record.Username,
+                    ["logged_in"] = AccountSettingsStore.Instance.LoginTokens.ContainsKey(record.Username),
+                    ["remember_password"] = record.RememberPassword,
+                    ["has_saved_password"] = record.HasSavedPassword,
+                    ["last_used_at"] = record.LastUsedAt,
+                });
+            }
+            return arr;
+        }
+
+        public async Task<JsonObject> LibraryJsonAsync(string username)
+        {
+            EnsureAccountStoreLoaded();
+            username = username?.Trim();
+            if (string.IsNullOrWhiteSpace(username))
+            {
                 return new JsonObject
                 {
-                    ["state"] = _state,
-                    ["kind"] = _kind,
-                    ["id"] = _id,
-                    ["prompt"] = _prompt,
-                    ["prompt_secret"] = _promptSecret,
-                    ["percent"] = _percent,
-                    ["progress_text"] = _progressText,
-                    ["log"] = string.Join('\n', tail),
-                    ["error"] = _error,
-                    ["output_dir"] = _outputDir,
-                    ["can_open_output"] = Directory.Exists(_outputDir),
+                    ["username"] = username ?? string.Empty,
+                    ["items"] = new JsonArray(),
+                    ["details_pending"] = false,
+                    ["message"] = "请先选择已登录账号",
+                };
+            }
+
+            if (!AccountSettingsStore.Instance.LoginTokens.TryGetValue(username, out var token) || string.IsNullOrWhiteSpace(token))
+            {
+                return new JsonObject
+                {
+                    ["username"] = username,
+                    ["items"] = new JsonArray(),
+                    ["details_pending"] = false,
+                    ["message"] = "该账号未登录或 refresh token 已失效，请先在账号页登录",
+                };
+            }
+
+            ConfigureLoginDownloader();
+            Steam3Session session = null;
+            try
+            {
+                session = new Steam3Session(new SteamUser.LogOnDetails
+                {
+                    Username = username,
+                    ShouldRememberPassword = true,
+                    AccessToken = token,
+                    LoginID = ContentDownloader.Config.LoginID ?? 0x534B32,
+                });
+
+                if (!session.WaitForCredentials())
+                {
+                    AccountSettingsStore.Instance.LoginTokens.Remove(username);
+                    AccountSettingsStore.Save();
+                    return new JsonObject
+                    {
+                        ["username"] = username,
+                        ["items"] = new JsonArray(),
+                        ["details_pending"] = false,
+                        ["message"] = "Steam 登录已失效，请在账号页重新登录后再同步游戏库",
+                    };
+                }
+
+                _ = Task.Run(session.TickCallbacks);
+                for (var i = 0; i < 60 && session.Licenses == null; i++)
+                {
+                    await Task.Delay(250).ConfigureAwait(false);
+                }
+
+                var packageIds = session.Licenses?.Select(x => x.PackageID).Distinct().ToList() ?? [];
+                if (packageIds.Count > 0)
+                {
+                    await session.RequestPackageInfo(packageIds).ConfigureAwait(false);
+                }
+
+                var appIds = new SortedSet<uint>();
+                foreach (var package in session.PackageInfo.Values.Where(x => x != null))
+                {
+                    foreach (var child in package.KeyValues["appids"].Children)
+                    {
+                        var appId = child.AsUnsignedInteger();
+                        if (appId > 0) appIds.Add(appId);
+                    }
+                }
+
+                foreach (var appId in appIds.Take(500))
+                {
+                    await session.RequestAppInfo(appId).ConfigureAwait(false);
+                }
+
+                var items = new JsonArray();
+                foreach (var appId in appIds)
+                {
+                    var name = $"App {appId}";
+                    if (session.AppInfo.TryGetValue(appId, out var appInfo) && appInfo != null)
+                    {
+                        var appName = appInfo.KeyValues["common"]["name"].AsString();
+                        if (!string.IsNullOrWhiteSpace(appName)) name = appName;
+                    }
+
+                    items.Add(new JsonObject
+                    {
+                        ["app_id"] = appId.ToString(),
+                        ["id"] = appId.ToString(),
+                        ["name"] = name,
+                        ["header_image"] = $"https://cdn.cloudflare.steamstatic.com/steam/apps/{appId}/header.jpg",
+                    });
+                }
+
+                return new JsonObject
+                {
+                    ["username"] = username,
+                    ["items"] = items,
+                    ["details_pending"] = appIds.Count > 500,
+                    ["message"] = appIds.Count > 500 ? "已同步游戏库，前 500 个应用已加载名称，其余应用会显示 AppID。" : "游戏库同步完成",
+                };
+            }
+            catch (Exception ex)
+            {
+                return new JsonObject
+                {
+                    ["username"] = username,
+                    ["items"] = new JsonArray(),
+                    ["details_pending"] = false,
+                    ["message"] = "游戏库同步失败: " + ex.Message,
+                };
+            }
+            finally
+            {
+                try { session?.Disconnect(); }
+                catch { }
+            }
+        }
+
+        public bool IsLoggedIn(string username)
+        {
+            EnsureAccountStoreLoaded();
+            return !string.IsNullOrWhiteSpace(username) && AccountSettingsStore.Instance.LoginTokens.ContainsKey(username.Trim());
+        }
+
+        public LoginState LoginStatus()
+        {
+            lock (_sync)
+            {
+                return new LoginState
+                {
+                    Username = _login.Username,
+                    State = _login.State,
+                    Prompt = _login.Prompt,
+                    PromptSecret = _login.PromptSecret,
+                    Error = _login.Error,
+                    Log = _login.Log,
+                    RememberPassword = _login.RememberPassword,
                 };
             }
         }
 
-        async Task RunLoginAsync(string username)
+        public bool StartLogin(string username, string password, out string error) => StartLogin(username, password, false, out error);
+
+        public bool StartLogin(string username, string password, bool rememberPassword, out string error)
         {
-            try
+            error = null;
+            username = username?.Trim();
+            if (string.IsNullOrWhiteSpace(username))
             {
-                lock (_sync)
-                {
-                    _state = "running";
-                    _progressText = "正在登录 Steam…";
-                }
-
-                EnsureAccountStoreLoaded();
-                ConfigureLogin();
-
-                var hadToken = AccountSettingsStore.Instance.LoginTokens.ContainsKey(username);
-                var password = hadToken
-                    ? null
-                    : ConsoleRelay.Instance.PromptAndRead($"Enter account password for \"{username}\":");
-
-                if (!hadToken && string.IsNullOrEmpty(password))
-                {
-                    throw new InvalidOperationException("未提供密码,登录终止");
-                }
-
-                AppendLog(hadToken ? $"使用已保存令牌登录账户 {username}…" : $"登录账户 {username}…");
-
-                if (!ContentDownloader.InitializeSteam3(username, password))
-                {
-                    ContentDownloader.ShutdownSteam3();
-
-                    if (hadToken && !AccountSettingsStore.Instance.LoginTokens.ContainsKey(username))
-                    {
-                        AppendLog("已保存令牌失效,请重新输入密码登录…");
-                        password = ConsoleRelay.Instance.PromptAndRead($"Enter account password for \"{username}\":");
-                        if (string.IsNullOrEmpty(password))
-                        {
-                            throw new InvalidOperationException("未提供密码,登录终止");
-                        }
-
-                        if (!ContentDownloader.InitializeSteam3(username, password))
-                        {
-                            throw new InvalidOperationException("Steam 登录失败,请检查账号密码/Steam Guard/网络后重试");
-                        }
-                    }
-                    else
-                    {
-                        throw new InvalidOperationException("Steam 登录失败,请检查账号密码/Steam Guard/网络后重试");
-                    }
-                }
-
-                ContentDownloader.ShutdownSteam3();
-
-                lock (_sync)
-                {
-                    _state = _cancelRequested ? "cancelled" : "done";
-                    _percent = 100;
-                    _progressText = _cancelRequested ? "登录已取消" : $"账户 {username} 登录成功,后续下载将自动复用登录状态";
-                }
+                error = "请输入 Steam 用户名";
+                return false;
             }
-            catch (OperationCanceledException)
+
+            EnsureAccountStoreLoaded();
+            if (!AccountSettingsStore.Instance.LoginTokens.ContainsKey(username) && string.IsNullOrEmpty(password))
             {
-                lock (_sync)
-                {
-                    _state = "cancelled";
-                }
+                error = "首次登录该账号需要输入密码";
+                return false;
             }
-            catch (Exception ex)
+
+            lock (_sync)
             {
-                AppendLog(ex.Message);
-                lock (_sync)
+                if (_busy)
                 {
-                    _state = _cancelRequested ? "cancelled" : "error";
-                    _error = ex.Message;
+                    error = "下载任务运行中,请等待完成后再登录账号";
+                    return false;
                 }
-            }
-            finally
-            {
-                ContentDownloader.ShutdownSteam3();
-                lock (_sync)
+
+                if (_login.State is "running" or "waiting_input")
                 {
-                    _busy = false;
+                    error = "已有账号登录流程正在进行";
+                    return false;
                 }
+
+                _login = new LoginState
+                {
+                    Username = username,
+                    State = "running",
+                    Log = "开始登录 " + username + "…",
+                    RememberPassword = rememberPassword,
+                };
+                ConsoleRelay.Instance.DrainPendingInput();
+                Task.Run(() => LoginAsync(username, password, rememberPassword));
+                return true;
             }
         }
 
-        async Task RunAsync(DownloadRequest request)
+        public bool SupplyLoginInput(string answer)
+        {
+            lock (_sync)
+            {
+                if (_login.State != "waiting_input") return false;
+            }
+
+            ConsoleRelay.Instance.SupplyInput(answer ?? string.Empty);
+            return true;
+        }
+
+        public bool Relogin(string username, out string error)
+        {
+            error = null;
+            username = username?.Trim();
+            var password = _store.GetSavedPassword(username);
+            if (string.IsNullOrEmpty(password))
+            {
+                error = "该账号没有保存密码，请输入密码重新登录";
+                return false;
+            }
+            return StartLogin(username, password, true, out error);
+        }
+
+        bool TryStartSavedPasswordLogin(string username, out string error)
+        {
+            error = null;
+            username = username?.Trim();
+            var password = _store.GetSavedPassword(username);
+            if (string.IsNullOrEmpty(password))
+            {
+                error = "请先在账号页面完成登录";
+                return false;
+            }
+
+            return StartLogin(username, password, true, out error);
+        }
+
+        public bool Logout(string username)
+        {
+            EnsureAccountStoreLoaded();
+            if (string.IsNullOrWhiteSpace(username)) return false;
+            var removed = AccountSettingsStore.Instance.LoginTokens.Remove(username);
+            AccountSettingsStore.Instance.GuardData.Remove(username);
+            _store.ClearAccountSecret(username);
+            if (removed) AccountSettingsStore.Save();
+            return removed;
+        }
+
+        async Task LoginAsync(string username, string password, bool rememberPassword)
         {
             try
             {
-                lock (_sync)
+                EnsureAccountStoreLoaded();
+                ConfigureLoginDownloader();
+                AppendLoginLog("正在连接 Steam…");
+                if (!ContentDownloader.InitializeSteam3(username, string.IsNullOrEmpty(password) ? null : password))
                 {
-                    _state = "running";
+                    throw new InvalidOperationException("Steam 登录失败,请检查账号密码/Guard/网络后重试");
                 }
 
+                await Task.Delay(300).ConfigureAwait(false);
+                ContentDownloader.ShutdownSteam3();
                 EnsureAccountStoreLoaded();
-                ConfigureLogin();
+                if (!AccountSettingsStore.Instance.LoginTokens.ContainsKey(username))
+                {
+                    throw new InvalidOperationException("登录已完成但未获得 refresh token,请确认账号授权状态后重试");
+                }
 
-                var baseOutputDir = string.IsNullOrWhiteSpace(request.OutputDir) ? DefaultDownloadDir() : request.OutputDir;
+                _store.TouchAccount(username);
+                _store.SaveAccountPassword(username, password, rememberPassword);
+
+                lock (_sync)
+                {
+                    _login.State = "done";
+                    _login.Prompt = "";
+                    _login.PromptSecret = false;
+                    _login.Error = "";
+                }
+                AppendLoginLog(rememberPassword
+                    ? "登录成功,refresh token 和加密密码已保存。后续可一键/自动重新登录。"
+                    : "登录成功,refresh token 已保存。后续下载将复用该账号。 ");
+            }
+            catch (Exception ex)
+            {
+                AppendLoginLog(ex.Message);
+                lock (_sync)
+                {
+                    _login.State = "error";
+                    _login.Error = ex.Message;
+                    _login.Prompt = "";
+                    _login.PromptSecret = false;
+                }
+                ContentDownloader.ShutdownSteam3();
+            }
+        }
+
+        async Task RunAsync(string jobId)
+        {
+            var job = _store.GetJob(jobId);
+            if (job == null) return;
+            var request = ToRequest(job);
+
+            try
+            {
+                _store.UpdateState(jobId, "running", prompt: "", promptSecret: false, error: "");
+
+                EnsureAccountStoreLoaded();
+                Directory.CreateDirectory(job.OutputDir);
+                ConfigureDownloader(request, job.OutputDir);
 
                 var username = request.Anonymous || string.IsNullOrWhiteSpace(request.Username)
                     ? null
@@ -364,18 +599,17 @@ namespace SteamDl.Core
                 string password = null;
                 if (username != null && !AccountSettingsStore.Instance.LoginTokens.ContainsKey(username))
                 {
-                    // 首次登录该账户:通过 Web UI 收集密码(不落盘,登录成功后只保存令牌)
-                    password = ConsoleRelay.Instance.PromptAndRead($"Enter account password for \"{username}\":");
-                    if (string.IsNullOrEmpty(password))
-                    {
-                        throw new InvalidOperationException("未提供密码,任务终止");
-                    }
+                    throw new InvalidOperationException("请先在账号页面完成登录");
                 }
 
                 AppendLog(username == null ? "使用匿名账户登录(仅限免费内容)…" : $"登录账户 {username}…");
 
                 if (!ContentDownloader.InitializeSteam3(username, password))
                 {
+                    if (username != null && TryStartSavedPasswordLogin(username, out _))
+                    {
+                        throw new InvalidOperationException("Steam 登录已失效，已自动尝试重新登录。请到账号页面完成可能需要的 Guard/2FA 验证后重试下载。");
+                    }
                     throw new InvalidOperationException("Steam 登录失败,请检查账号密码/网络后重试");
                 }
 
@@ -384,9 +618,6 @@ namespace SteamDl.Core
                     if (request.Kind == "workshop")
                     {
                         var pubFileId = ulong.Parse(request.Id);
-                        SetOutputDir(Path.Combine(baseOutputDir, "workshop_" + request.Id));
-                        Directory.CreateDirectory(_outputDir);
-                        ConfigureDownloader(request, _outputDir);
                         AppendLog("解析创意工坊物品所属 App…");
                         var appId = await AppInfoService.ResolveWorkshopAppIdAsync(pubFileId).ConfigureAwait(false);
                         AppendLog($"物品属于 App {appId},开始下载…");
@@ -395,12 +626,6 @@ namespace SteamDl.Core
                     else
                     {
                         var appId = uint.Parse(request.Id);
-                        var installDirName = await ResolveAppInstallDirectoryNameAsync(appId).ConfigureAwait(false);
-                        SetOutputDir(Path.Combine(baseOutputDir, installDirName));
-                        Directory.CreateDirectory(_outputDir);
-                        ConfigureDownloader(request, _outputDir);
-                        AppendLog($"使用 Steam 安装目录名: {installDirName}");
-
                         var depots = new List<(uint depotId, ulong manifestId)>();
                         if (uint.TryParse(request.DepotId, out var depotId) && depotId > 0)
                         {
@@ -418,67 +643,49 @@ namespace SteamDl.Core
                     ContentDownloader.ShutdownSteam3();
                 }
 
-                lock (_sync)
+                if (_cancelRequested)
                 {
-                    if (_cancelRequested)
-                    {
-                        _state = "cancelled";
-                    }
-                    else
-                    {
-                        _state = "done";
-                        _percent = 100;
-                    }
+                    _store.UpdateState(jobId, "cancelled");
+                }
+                else
+                {
+                    _store.UpdateState(jobId, "done", percent: 100, progressText: "已保存到: " + job.OutputDir);
                 }
             }
             catch (OperationCanceledException)
             {
-                lock (_sync)
-                {
-                    _state = "cancelled";
-                }
+                _store.UpdateState(jobId, "cancelled");
             }
             catch (Exception ex)
             {
                 AppendLog(ex.Message);
-                lock (_sync)
-                {
-                    if (_cancelRequested)
-                    {
-                        _state = "cancelled";
-                    }
-                    else
-                    {
-                        _state = "error";
-                        _error = ex.Message;
-                    }
-                }
+                _store.UpdateState(jobId, _cancelRequested ? "cancelled" : "error", error: ex.Message);
             }
             finally
             {
                 lock (_sync)
                 {
+                    if (_currentJobId == jobId)
+                    {
+                        _currentJobId = null;
+                    }
                     _busy = false;
+                    _cancelRequested = false;
                 }
             }
         }
 
-        void EnsureAccountStoreLoaded()
+        public void EnsureAccountStoreLoaded()
         {
             lock (_sync)
             {
-                if (_accountStoreLoaded)
-                {
-                    return;
-                }
-
+                if (_accountStoreLoaded) return;
                 AccountSettingsStore.LoadFromFile("account.config");
-                AppendLogLocked($"Steam 登录状态缓存: {AccountSettingsStore.CurrentFilePath}");
                 _accountStoreLoaded = true;
             }
         }
 
-        static void ConfigureLogin()
+        static void ConfigureLoginDownloader()
         {
             var cfg = ContentDownloader.Config;
             cfg.RememberPassword = true;
@@ -486,17 +693,19 @@ namespace SteamDl.Core
             cfg.SkipAppConfirmation = false;
             cfg.CellID = 0;
             cfg.LoginID = null;
+            cfg.InstallDirectory = AppPaths.DataDir;
         }
 
         static void ConfigureDownloader(DownloadRequest request, string installDir)
         {
             var cfg = ContentDownloader.Config;
-            cfg.RememberPassword = true; // 只保存登录令牌(refresh token),不保存密码
+            var settings = JobStore.Instance.GetSettings();
+            cfg.RememberPassword = true;
             cfg.UseQrCode = false;
-            cfg.SkipAppConfirmation = false; // 允许 Steam 手机 App 直接点确认登录
+            cfg.SkipAppConfirmation = false;
             cfg.DownloadManifestOnly = false;
             cfg.CellID = 0;
-            cfg.MaxDownloads = 8;
+            cfg.MaxDownloads = settings.MaxDownloads;
             cfg.LoginID = null;
             cfg.InstallDirectory = installDir;
             cfg.UsingFileList = false;
@@ -509,51 +718,60 @@ namespace SteamDl.Core
             cfg.DownloadAllLanguages = false;
         }
 
-        static async Task<string> ResolveAppInstallDirectoryNameAsync(uint appId)
-        {
-            var installDir = await ContentDownloader.GetAppInstallDirAsync(appId).ConfigureAwait(false);
-            var safe = SanitizePathSegment(installDir);
-            return string.IsNullOrWhiteSpace(safe) ? "app_" + appId : safe;
-        }
-
-        static string SanitizePathSegment(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return string.Empty;
-            }
-
-            var invalid = Path.GetInvalidFileNameChars()
-                .Concat(['<', '>', ':', '"', '/', '\\', '|', '?', '*'])
-                .Distinct()
-                .ToArray();
-            var chars = value.Trim().Select(c => invalid.Contains(c) ? '_' : c).ToArray();
-            return new string(chars).Trim().TrimEnd('.');
-        }
-
-        void SetOutputDir(string outputDir)
-        {
-            lock (_sync)
-            {
-                _outputDir = outputDir;
-            }
-        }
-
         void AppendLog(string line)
         {
+            if (string.IsNullOrEmpty(line)) return;
+            var jobId = _currentJobId;
+            if (!string.IsNullOrWhiteSpace(jobId))
+            {
+                _store.AddLog(jobId, line, MaxLogLines);
+                return;
+            }
+
+            AppendLoginLog(line);
+        }
+
+        void AppendLoginLog(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return;
             lock (_sync)
             {
-                AppendLogLocked(line);
+                if (_login.State == "idle") return;
+                var lines = (_login.Log ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+                lines.Add(line);
+                if (lines.Count > MaxLogLines) lines = lines.Skip(lines.Count - MaxLogLines).ToList();
+                _login.Log = string.Join('\n', lines);
             }
         }
 
-        void AppendLogLocked(string line)
+        static string Validate(DownloadRequest request)
         {
-            _log.Add(line);
-            if (_log.Count > MaxLogLines)
+            if (request == null) return "请求为空";
+            if (!ulong.TryParse(request.Id, out _)) return "无效的 AppID/物品 ID";
+            if (request.Kind != "app" && request.Kind != "workshop") return "无效的任务类型";
+            return null;
+        }
+
+        static string ResolveOutputDir(DownloadRequest request)
+        {
+            var baseDir = string.IsNullOrWhiteSpace(request.OutputDir)
+                ? JobStore.Instance.GetSettings().DefaultDownloadDir
+                : request.OutputDir;
+            return Path.Combine(baseDir, (request.Kind == "workshop" ? "workshop_" : "app_") + request.Id);
+        }
+
+        static DownloadRequest ToRequest(JobRecord job)
+        {
+            return new DownloadRequest
             {
-                _log.RemoveRange(0, _log.Count - MaxLogLines);
-            }
+                Kind = job.Kind,
+                Id = job.ItemId,
+                Username = job.Username,
+                Anonymous = job.Anonymous,
+                Os = job.PlatformOs,
+                DepotId = job.DepotId,
+                OutputDir = Path.GetDirectoryName(job.OutputDir),
+            };
         }
 
         static string FormatBytes(ulong bytes)
