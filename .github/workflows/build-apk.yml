@@ -1,0 +1,96 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: "构建配置"
+        type: choice
+        options: [Release, Debug]
+        default: Release
+  push:
+    branches: [master]
+    tags: ["v*"]
+    paths:
+      - "src/**"
+      - "external/**"
+      - "build.mjs"
+      - ".github/workflows/build-apk.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "external/**"
+      - "build.mjs"
+      - ".github/workflows/build-apk.yml"
+
+# 同一分支/PR 只保留最新一次构建，取消排队中的旧任务
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    env:
+      # PR 上不使用签名密钥，只构建 Debug；master/tag/手动触发才使用 Release + 签名
+      CONFIG: ${{ github.event_name == 'pull_request' && 'Debug' || (inputs.config || 'Release') }}
+      HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/SteamDl.Web/package-lock.json
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: .tools/nuget
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Prepare release keystore
+        if: env.HAS_RELEASE_KEYSTORE == 'true' && env.CONFIG == 'Release'
+        run: |
+          mkdir -p .tools/keystore
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > .tools/keystore/steamdl-release.keystore
+
+      - name: Build APK
+        env:
+          ANDROID_KEYSTORE: ${{ (env.HAS_RELEASE_KEYSTORE == 'true' && env.CONFIG == 'Release') && '.tools/keystore/steamdl-release.keystore' || '' }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_STORE_PASS: ${{ secrets.ANDROID_STORE_PASS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+        run: |
+          node build.mjs build-apk \
+            --config=${{ env.CONFIG }} \
+            --nuget-source=https://api.nuget.org/v3/index.json \
+            --npm-registry=https://registry.npmjs.org
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: steamdl-apk-${{ env.CONFIG }}-${{ github.sha }}
+          path: artifacts/apk/*.apk
+          if-no-files-found: error
+          retention-days: 14

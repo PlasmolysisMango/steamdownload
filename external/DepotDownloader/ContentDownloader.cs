@@ -179,6 +179,18 @@ namespace DepotDownloader
             return section_kv;
         }
 
+        public static async Task<string> GetAppInstallDirAsync(uint appId)
+        {
+            if (steam3 == null)
+            {
+                return null;
+            }
+
+            await steam3.RequestAppInfo(appId);
+            var config = GetSteam3AppSection(appId, EAppInfoSection.Config);
+            return config?["installdir"]?.AsString();
+        }
+
         static uint GetSteam3AppBuildNumber(uint appId, string branch)
         {
             if (appId == INVALID_APP_ID)

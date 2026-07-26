@@ -6,7 +6,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
-using System.IO.IsolatedStorage;
 using ProtoBuf;
 
 namespace DepotDownloader
@@ -42,22 +41,26 @@ namespace DepotDownloader
         }
 
         public static AccountSettingsStore Instance;
-        static readonly IsolatedStorageFile IsolatedStorage = IsolatedStorageFile.GetUserStoreForAssembly();
+
+        public static string CurrentFilePath { get; private set; }
 
         public static void LoadFromFile(string filename)
         {
             if (Loaded)
                 throw new Exception("Config already loaded");
 
-            if (IsolatedStorage.FileExists(filename))
+            var path = ResolveFilePath(filename);
+
+            if (File.Exists(path))
             {
                 try
                 {
-                    using var fs = IsolatedStorage.OpenFile(filename, FileMode.Open, FileAccess.Read);
+                    using var fs = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
                     using var ds = new DeflateStream(fs, CompressionMode.Decompress);
                     Instance = Serializer.Deserialize<AccountSettingsStore>(ds);
+                    Instance.EnsureDefaults();
                 }
-                catch (IOException ex)
+                catch (Exception ex) when (ex is IOException || ex is InvalidDataException || ex is ProtoException || ex is UnauthorizedAccessException)
                 {
                     Console.WriteLine("Failed to load account settings: {0}", ex.Message);
                     Instance = new AccountSettingsStore();
@@ -68,7 +71,8 @@ namespace DepotDownloader
                 Instance = new AccountSettingsStore();
             }
 
-            Instance.FileName = filename;
+            Instance.FileName = path;
+            CurrentFilePath = path;
         }
 
         public static void Save()
@@ -78,14 +82,51 @@ namespace DepotDownloader
 
             try
             {
-                using var fs = IsolatedStorage.OpenFile(Instance.FileName, FileMode.Create, FileAccess.Write);
+                var directory = Path.GetDirectoryName(Instance.FileName);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                using var fs = File.Open(Instance.FileName, FileMode.Create, FileAccess.Write, FileShare.None);
                 using var ds = new DeflateStream(fs, CompressionMode.Compress);
                 Serializer.Serialize(ds, Instance);
             }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
                 Console.WriteLine("Failed to save account settings: {0}", ex.Message);
             }
+        }
+
+        static string ResolveFilePath(string filename)
+        {
+            if (Path.IsPathRooted(filename))
+            {
+                return filename;
+            }
+
+            var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            if (string.IsNullOrWhiteSpace(baseDir))
+            {
+                baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            }
+            if (string.IsNullOrWhiteSpace(baseDir))
+            {
+                baseDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            }
+            if (string.IsNullOrWhiteSpace(baseDir))
+            {
+                baseDir = AppContext.BaseDirectory;
+            }
+
+            return Path.Combine(baseDir, "SteamDl", filename);
+        }
+
+        void EnsureDefaults()
+        {
+            ContentServerPenalty ??= new ConcurrentDictionary<string, int>();
+            LoginTokens ??= new(StringComparer.OrdinalIgnoreCase);
+            GuardData ??= new(StringComparer.OrdinalIgnoreCase);
         }
     }
 }

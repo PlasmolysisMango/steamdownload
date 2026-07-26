@@ -17,72 +17,156 @@ external/
 └── DepotDownloader/    # 上游源码,零修改(Program/Ansi 等由 Core/Shims 替身实现替代)
 ```
 
-## Makefile 一键命令
+## Node.js 一键命令
 
-推荐在 Linux/macOS/WSL 开发机上直接使用根目录 `Makefile`：
-
-```bash
-make doctor        # 检查 dotnet/java/Android SDK 环境
-make install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
-make build         # 构建桌面服务端
-make run           # 运行 Web UI，默认 http://127.0.0.1:8630
-make build-apk     # 构建 Android APK，输出到 artifacts/apk
-```
-
-可覆盖常用变量：
+所有平台统一使用根目录 [build.mjs](file:///root/workspace/project/steamdownload/build.mjs)。先安装 Node.js LTS：Windows 可用官网安装包或 `winget install OpenJS.NodeJS.LTS`，Linux/macOS 可用系统包管理器或 Node.js 官网安装包。
 
 ```bash
-make run PORT=9000
-make build-apk CONFIG=Release ANDROID_API=35 ANDROID_BUILD_TOOLS=35.0.0
+node build.mjs doctor        # 检查 dotnet/java/Android SDK 环境
+node build.mjs install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
+node build.mjs build         # 构建桌面服务端
+node build.mjs run --port=8630
+node build.mjs build-apk     # 构建 Android APK，输出到 artifacts/apk
+node build.mjs clean
 ```
 
-`make install-deps` 会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`，不污染系统全局环境。
+可覆盖常用参数：
 
-## Windows Node.js 一键命令
-
-Windows 原生环境推荐使用根目录 [build.mjs](file:///root/workspace/project/steamdownload/build.mjs)。先安装 Node.js LTS（官网安装包或 `winget install OpenJS.NodeJS.LTS`），然后执行：
-
-```powershell
-node .\build.mjs doctor        # 检查 dotnet/java/Android SDK 环境
-node .\build.mjs install-deps  # 本地安装依赖(.NET/JDK/Android SDK/workload/restore)
-node .\build.mjs build         # 构建桌面服务端
-node .\build.mjs run --port=8630
-node .\build.mjs build-apk     # 构建 Android APK，输出到 artifacts\apk
-node .\build.mjs clean
+```bash
+node build.mjs run --port=9000
+node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0
+node build.mjs build-apk --cn-mirror=true   # 国内网络环境下优先用国内镜像(NuGet/npm/JDK/Android cmdline-tools/Docker 镜像)
+node build.mjs build-apk --nuget-source=https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json
 ```
 
-`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools\`。
+`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`。所有下载/包源默认均使用官方地址（NuGet=`https://api.nuget.org/v3/index.json`，npm=`https://registry.npmjs.org`，JDK/Android cmdline-tools 从 Adoptium/Google 官方地址下载，Docker 镜像默认使用 Docker Hub / mcr.microsoft.com）。如果你在国内网络访问官方源较慢，可追加 `--cn-mirror=true`（或设置环境变量 `CN_MIRROR=1`）让上述来源统一优先切换为国内镜像；也可以只针对某一项显式指定 `--nuget-source=<URL[,URL...]>` / `--npm-registry=<URL>` / `--jdk-url=<URL>` / `--android-cmdline-tools-url=<URL>` / `--web-docker-image=<image>` / `--dotnet-docker-image=<image>`（或对应环境变量），单独覆盖时不受 `--cn-mirror` 影响。
+
+在真正开始 `build` / `install-deps` / `restore` / `build-apk` 等会联网的任务前，脚本会先用短超时 HEAD 请求探测本次要用的 NuGet 源、npm registry（涉及下载 JDK/Android cmdline-tools 时同样会探测那组候选地址）；探测不通的源会被快速剔除，未显式指定 `--nuget-source` / `--npm-registry` 时还会自动补充官方源/国内镜像作为退避候选，避免把死源交给 `dotnet restore` / `npm install` 导致长时间卡住（只有当全部候选都探测失败时，才会保留原始列表继续尝试，防止探测本身误判导致完全无法构建）。可用 `--skip-probe=true`（或 `SKIP_SOURCE_PROBE=1`）关闭探测，`--probe-timeout=<ms>`（或 `SOURCE_PROBE_TIMEOUT`）调整探测超时（默认 4000ms），`--download-timeout=<ms>`（或 `DOWNLOAD_TIMEOUT`）调整单次下载的无活动超时（默认 20000ms）。
 
 ## 桌面运行（已在 Linux 验证）
 
 ```bash
-make run
-# 或者不用 Makefile:
+node build.mjs run --port=8630
+# 或者直接运行 .NET 项目:
 dotnet run --project src/SteamDl.Server   # 浏览器打开 http://127.0.0.1:8630
 ```
 
 ## 构建 Android APK
 
-需要:.NET 9 SDK、JDK 17、Android SDK（装过 Android Studio 即有）。
+需要:.NET 9 SDK、JDK 17、Android SDK（装过 Android Studio 即有）。也可以直接让 [build.mjs](file:///root/workspace/project/steamdownload/build.mjs) 自动安装到项目本地 `.tools/`。
+
+常用命令：
 
 ```bash
-make install-deps
-make build-apk
-# 或者不用 Makefile:
-dotnet workload restore src/SteamDl.Android
-dotnet publish src/SteamDl.Android -c Release
+# 检查当前构建环境
+node build.mjs doctor
+
+# 安装/还原 Android 构建依赖：.NET SDK、JDK、Android SDK、Android workload、NuGet 包
+node build.mjs install-deps
+
+# 使用默认配置构建 APK
+node build.mjs build-apk
+
+# 明确使用 Release、Android API 35、Build Tools 35.0.0 构建 APK
+node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0
+
+# 使用外部正式 keystore 签名 Release APK
+node build.mjs build-apk --config=Release --keystore=/path/steamdl-release.keystore --key-alias=steamdl --store-pass=你的密码 --key-pass=你的密码
+
+# 也可以用环境变量传入正式签名配置
+ANDROID_KEYSTORE=/path/steamdl-release.keystore ANDROID_KEY_ALIAS=steamdl ANDROID_STORE_PASS=你的密码 ANDROID_KEY_PASS=你的密码 node build.mjs build-apk --config=Release
+
+# 网络或 NuGet 配置异常时，显式指定 NuGet 源列表（逗号分隔，前面的源优先）
+node build.mjs build-apk --nuget-source=https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json
+
+# 国内网络环境下一键切换 NuGet/npm/JDK/Android cmdline-tools/Docker 镜像为国内源
+node build.mjs build-apk --cn-mirror=true
+
+# 清理 bin/obj/artifacts
+node build.mjs clean
+```
+
+`build-apk` 默认配置（未加 `--cn-mirror` 时）：
+
+```text
+--config=Release
+--android-api=35
+--android-build-tools=35.0.0
+--nuget-source=https://api.nuget.org/v3/index.json
+--npm-registry=https://registry.npmjs.org
+ANDROID_SDK_ROOT=.tools/android-sdk（未设置系统 ANDROID_SDK_ROOT/ANDROID_HOME 时）
+APK 输出目录=artifacts/apk
+Release keystore 默认路径=.tools/keystore/steamdl-release.keystore
+Release key alias 默认值=steamdl
+```
+
+追加 `--cn-mirror=true`（或 `CN_MIRROR=1`）后，NuGet 默认改为 `https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json`，npm registry 默认改为 `https://registry.npmmirror.com`，JDK/Android cmdline-tools 下载与 Docker 镜像也一并切换为国内源，官方源仍作为兜底。
+
+实际执行流程：
+
+```text
+1. 确认可用 .NET 9 SDK；没有则安装到 .tools/dotnet 或 .tools/dotnet-win
+2. 安装/复用 JDK 17
+3. 安装/复用 Android cmdline-tools、platform-tools、platforms;android-<api>、build-tools;<version>
+4. 执行 dotnet workload restore src/SteamDl.Android --source <nuget-source...>
+5. 执行 dotnet restore src/SteamDl.Android --source <nuget-source...>
+6. Release 构建时确认 keystore：未指定则自动生成并复用 `.tools/keystore/steamdl-release.keystore`
+7. 执行 dotnet publish src/SteamDl.Android -c <config> -p:AndroidPackageFormat=apk，并显式传入 AndroidSdkDirectory/JavaSdkDirectory；Release 时额外传入 AndroidKeyStore/AndroidSigning* 参数
+8. 将生成的 .apk 复制到 artifacts/apk
+```
+
+当前 Android 项目配置为 `net9.0-android`，`RuntimeIdentifiers=android-arm64`，因此产物面向 arm64 Android 设备。`Debug` APK 通常会自动使用 debug keystore 签名，适合临时测试；`Release` APK 现在会自动签名：如果未通过参数或环境变量指定 keystore，脚本会生成并复用 `.tools/keystore/steamdl-release.keystore`。注意不要删除这个 keystore，否则后续同包名 APK 无法覆盖升级旧安装，只能卸载重装。正式分发时应使用你自己长期保存的 keystore，并通过 `--keystore` / `--key-alias` / `--store-pass` / `--key-pass` 或环境变量传入。
+
+如果不用脚本，等价核心命令大致是：
+
+```bash
+dotnet workload restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
+dotnet restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
+dotnet publish src/SteamDl.Android -c Release -p:AndroidPackageFormat=apk -p:AndroidSdkDirectory=<Android SDK路径> -p:JavaSdkDirectory=<JDK路径> -p:AndroidKeyStore=true -p:AndroidSigningKeyStore=<keystore路径> -p:AndroidSigningKeyAlias=steamdl -p:AndroidSigningStorePass=<密码> -p:AndroidSigningKeyPass=<密码>
 ```
 
 侧载安装后首次启动会跳转"所有文件访问"授权页（写 /sdcard/Download 需要），
-授权后返回应用即可使用。下载目录默认 `/sdcard/Download/steamdl/app_<appid>`。
+授权后返回应用即可使用。下载目录默认优先使用已保存的配置；未配置时使用 `/sdcard/Download/steamdl`。
+
+## GitHub Actions 自动构建 APK
+
+工作流文件：[.github/workflows/build-apk.yml](file:///root/workspace/project/steamdownload/.github/workflows/build-apk.yml)。触发方式：
+
+```text
+push 到 master（改动涉及 src/、external/、build.mjs 时）
+push tag（形如 v1.0.0）
+pull_request（只构建 Debug，不使用签名密钥）
+workflow_dispatch（手动触发，可选择 Release/Debug）
+```
+
+CI 环境使用 `actions/setup-node`、`actions/setup-java`（Temurin 17）、`android-actions/setup-android`、`actions/setup-dotnet`（9.0.x）预装工具链，再执行 `node build.mjs build-apk`，并显式指定官方源（`--nuget-source=https://api.nuget.org/v3/index.json --npm-registry=https://registry.npmjs.org`），避免国内镜像在 CI 环境反而变慢。NuGet 包缓存通过 `actions/cache` 缓存 `.tools/nuget`。
+
+Release 签名（可选，未配置则脚本会在 CI 里生成一个临时本地 keystore，仅用于验证构建，不适合长期分发）：
+
+```text
+1. 本地生成正式 keystore: keytool -genkeypair -v -keystore steamdl-release.keystore -alias steamdl -keyalg RSA -keysize 2048 -validity 10000
+2. 转 base64: base64 -w0 steamdl-release.keystore
+3. 在仓库 Settings -> Secrets and variables -> Actions 中添加:
+   ANDROID_KEYSTORE_BASE64  # 上一步 base64 结果
+   ANDROID_KEY_ALIAS
+   ANDROID_STORE_PASS
+   ANDROID_KEY_PASS
+```
+
+配置好这些 secrets 后，`push master` / `push tag` / 手动触发且选择 Release 时会使用该 keystore 签名；未配置时 Release 构建仍会成功，但每次生成的临时 keystore 不同，产物无法覆盖升级，仅用于验证构建流程。构建完成后在该次 workflow run 的 Artifacts 中下载 `steamdl-apk-<config>-<sha>`，里面是生成的 `.apk` 文件。
 
 ## 使用说明
 
-- 粘贴商店链接 / steam:// 链接 / AppID → 解析 → 选择账号与平台 → 下载。
+- 粘贴商店链接 / steam:// 链接 / AppID → 解析。
+- 账号模式可二选一：勾选匿名下载（仅限免费/服务器内容），或输入 Steam 用户名后点击“登录”，登录成功后再下载。
 - DLC:账号拥有即随本体一起下载;单独补 DLC 填其 Depot ID（steamdb.info 可查）。
-- 登录只保存 refresh token（DD 的 account.config 机制），密码不落盘。
-- Steam Guard:可直接在 Steam 手机 App 点确认，或在页面输入框提交令牌。
-- 拷贝到 PC:将 `app_<appid>` 内的文件放入 `Steam\steamapps\common\<游戏安装目录名>`，
+- 登录成功后会保存 Steam refresh token 到应用数据目录的 `SteamDl/account.config`，后续同一账号可免密码复用；密码不落盘。
+- Steam Guard:登录或下载过程需要验证时，可直接在 Steam 手机 App 点确认，或在页面输入框提交令牌。
+- 保存目录可点击“选择”调用系统目录选择器：Windows 使用资源管理器目录选择，Android 使用系统文件管理器；如果选择器不可用或路径不可写，可继续手动输入。保存目录会持久化到应用配置中。
+- 下载完成后默认目录会尽量使用 Steam appinfo 的安装目录名（即 `steamapps/common/<游戏安装目录名>` 中的那一段）；如果 Steam 元数据取不到，才回退到 `app_<appid>`。
+- Android 可尝试选择外置存储或 U 盘目录；是否可直接写入取决于系统是否把该目录暴露为可写真实路径（如 `/storage/XXXX-XXXX/...`）以及“所有文件访问”授权。若文件管理器只返回 SAF URI 且无法转换为真实路径，则当前下载引擎无法直接写入，需要手动输入可写挂载路径或先下载到手机存储后再复制。
+- 下载完成后可点击“打开所在位置”；若当前平台/文件管理器不支持自动打开，可按页面显示的目录手动进入。
+- 拷贝到 PC:将下载目录内的文件放入 Steam 库的 `Steam\steamapps\common\<游戏安装目录名>`，
   Steam 里点"安装"会自动发现现有文件并只校验补差。
 
 ## 注意

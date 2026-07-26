@@ -1,10 +1,46 @@
 # build outputs
 bin/
 obj/
+artifacts/
+**/bin/
+**/obj/
 
-# local tooling (dotnet sdk / nuget cache / vendored clone)
+# generated web assets (built from src/SteamDl.Web)
+src/SteamDl.Core/wwwroot/index.html
+src/SteamDl.Core/wwwroot/assets/
+src/SteamDl.Web/dist/
+src/SteamDl.Web/.vite/
+
+# local tooling and dependency caches
 .tools/
+**/node_modules/
+.npm/
+.yarn/
+.pnpm-store/
 
-# runtime artifacts
+# runtime artifacts and downloaded content
 *.log
 .dlout*/
+downloads/
+depots/
+.DepotDownloader/
+account.config
+password.key
+steamdl.db
+*.db
+*.db-shm
+*.db-wal
+
+# local environment / secrets
+.env
+.env.*
+*.keystore
+*.jks
+
+# editor / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
