@@ -60,6 +60,14 @@ nav button.active { color: var(--text); background: rgba(85, 167, 255, .14); }
 .inlineRow input { min-width: 0; }
 .inlineRow button { flex: 0 0 auto; }
 .search { margin-top: 12px; }
+.libraryControls { display: grid; grid-template-columns: minmax(220px, 1fr) 160px 110px 130px; gap: 10px; align-items: center; margin-top: 12px; }
+.libraryControls .search { margin-top: 0; }
+.libraryResults.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.libraryResults.list { display: grid; gap: 10px; }
+.libraryResults.list .game { display: grid; grid-template-columns: 96px minmax(0, 1fr) 160px; gap: 14px; align-items: center; padding: 12px; }
+.libraryResults.list .game img { width: 96px; height: 45px; object-fit: cover; margin: 0; border-radius: 10px; }
+.libraryResults.list .gameText h3 { margin-bottom: 4px; }
+.libraryResults.list .game .block { width: auto; }
 .check { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 9px; color: var(--text); }
 .check input { width: auto; }
 .cover, .game { overflow: hidden; }
@@ -98,6 +106,11 @@ pre.expanded { height: min(56vh, 420px); }
   .iconStatus, .iconButton { width: 42px; height: 42px; }
   .swipeHint { display: inline-block; margin-top: 4px; }
   .row { flex-direction: column; align-items: stretch; }
+  .libraryControls { grid-template-columns: 1fr; }
+  .libraryResults.grid { grid-template-columns: 1fr; }
+  .libraryResults.list .game { grid-template-columns: 72px minmax(0, 1fr); }
+  .libraryResults.list .game img { width: 72px; height: 34px; }
+  .libraryResults.list .game .block { grid-column: 1 / -1; width: 100%; }
   .inlineRow { flex-direction: row; }
   .inlineRow button { min-width: 78px; }
   .span2 { grid-column: auto; }

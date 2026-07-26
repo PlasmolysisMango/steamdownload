@@ -45,11 +45,14 @@ namespace SteamDl.Core
         public string Username { get; set; } = "";
         public string State { get; set; } = "idle";
         public string Message { get; set; } = "尚未同步游戏库";
+        public string SyncMode { get; set; } = "full";
+        public string LastSyncAt { get; set; } = "";
         public int LicenseCount { get; set; }
         public int PackageCount { get; set; }
         public int ResolvedPackageCount { get; set; }
         public int CandidateAppCount { get; set; }
         public int ScannedAppCount { get; set; }
+        public HashSet<uint> KnownCandidateAppIds { get; } = [];
         public List<LibraryGameItem> Items { get; } = [];
     }
 
@@ -334,11 +337,13 @@ namespace SteamDl.Core
 
         public Task<JsonObject> LibraryJsonAsync(string username)
         {
-            StartLibrarySync(username);
+            StartLibrarySync(username, forceFullSync: false);
             return Task.FromResult(LibrarySyncStatusJson(username));
         }
 
-        public JsonObject StartLibrarySync(string username)
+        public JsonObject StartLibrarySync(string username) => StartLibrarySync(username, forceFullSync: false);
+
+        public JsonObject StartLibrarySync(string username, bool forceFullSync)
         {
             EnsureAccountStoreLoaded();
             username = username?.Trim();
@@ -360,6 +365,10 @@ namespace SteamDl.Core
                 }
             }
 
+            var syncMode = "full";
+            List<LibraryGameItem> preservedItems = [];
+            HashSet<uint> preservedCandidates = [];
+            string lastSyncAt = "";
             lock (_sync)
             {
                 if (_librarySync.State == "running" && string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase))
@@ -367,15 +376,30 @@ namespace SteamDl.Core
                     return LibrarySyncJsonLocked();
                 }
 
+                var canIncremental = !forceFullSync
+                    && string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase)
+                    && _librarySync.Items.Count > 0;
+                syncMode = canIncremental ? "incremental" : "full";
+                if (canIncremental)
+                {
+                    preservedItems = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir }).ToList();
+                    preservedCandidates = _librarySync.KnownCandidateAppIds.ToHashSet();
+                    lastSyncAt = _librarySync.LastSyncAt;
+                }
+
                 _librarySync = new LibrarySyncState
                 {
                     Username = username,
                     State = "running",
-                    Message = "正在连接 Steam 并读取账号库…",
+                    SyncMode = syncMode,
+                    LastSyncAt = lastSyncAt,
+                    Message = syncMode == "full" ? "正在全量同步 Steam 游戏库…" : "正在增量同步 Steam 游戏库…",
                 };
+                foreach (var appId in preservedCandidates) _librarySync.KnownCandidateAppIds.Add(appId);
+                foreach (var item in preservedItems) _librarySync.Items.Add(item);
             }
 
-            Task.Run(() => LibrarySyncAsync(username, token));
+            Task.Run(() => LibrarySyncAsync(username, token, syncMode));
             return LibrarySyncStatusJson(username);
         }
 
@@ -398,12 +422,13 @@ namespace SteamDl.Core
             }
         }
 
-        async Task LibrarySyncAsync(string username, string token)
+        async Task LibrarySyncAsync(string username, string token, string syncMode)
         {
             Steam3Session session = null;
             try
             {
                 ConfigureLoginDownloader();
+                AppendLoginLog($"开始{(syncMode == "full" ? "全量" : "增量")}同步 {username} 的 Steam 游戏库…");
                 session = new Steam3Session(new SteamUser.LogOnDetails
                 {
                     Username = username,
@@ -424,14 +449,29 @@ namespace SteamDl.Core
                 for (var i = 0; i < 60 && session.Licenses == null; i++) await Task.Delay(250).ConfigureAwait(false);
 
                 var packageIds = session.Licenses?.Where(x => x.AccessToken > 0).Select(x => x.PackageID).Distinct().ToList() ?? [];
-                UpdateLibrarySync(username, s => { s.LicenseCount = session.Licenses?.Count ?? 0; s.PackageCount = packageIds.Count; s.Message = $"已读取 {s.LicenseCount} 个 license，正在解析其中 {s.PackageCount} 个带授权 token 的 package…"; });
+                var licenseMessage = $"已读取 {session.Licenses?.Count ?? 0} 个 license；其中 {packageIds.Count} 个 package 带授权 token。license 是授权包，单个 package 可能包含多个 app/DLC/tool。";
+                AppendLoginLog(licenseMessage);
+                UpdateLibrarySync(username, s => { s.LicenseCount = session.Licenses?.Count ?? 0; s.PackageCount = packageIds.Count; s.Message = licenseMessage + " 正在解析 package…"; });
 
                 if (packageIds.Count > 0) await session.RequestPackageInfo(packageIds).ConfigureAwait(false);
 
                 var appIds = new SortedSet<uint>();
                 foreach (var package in session.PackageInfo.Values.Where(x => x != null)) AddPackageAppIds(package.KeyValues["appids"], appIds);
-                var appList = appIds.ToList();
-                UpdateLibrarySync(username, s => { s.ResolvedPackageCount = session.PackageInfo.Values.Count(x => x != null); s.CandidateAppCount = appList.Count; s.Message = $"已从授权 package 中解析 {appList.Count} 个候选应用，正在读取游戏详情…"; });
+                List<uint> appList;
+                int skippedKnownCount;
+                lock (_sync)
+                {
+                    var knownIds = syncMode == "incremental" && string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase)
+                        ? _librarySync.KnownCandidateAppIds.ToHashSet()
+                        : new HashSet<uint>();
+                    skippedKnownCount = knownIds.Count;
+                    appList = appIds.Where(x => !knownIds.Contains(x)).ToList();
+                }
+                var candidateMessage = syncMode == "incremental"
+                    ? $"已从 {session.PackageInfo.Values.Count(x => x != null)}/{packageIds.Count} 个授权 package 展开 {appIds.Count} 个候选应用；已缓存 {skippedKnownCount} 个候选应用，本次检查 {appList.Count} 个新增候选。"
+                    : $"已从 {session.PackageInfo.Values.Count(x => x != null)}/{packageIds.Count} 个授权 package 展开 {appList.Count} 个候选应用；候选应用会继续过滤，只显示 type=game 的游戏。";
+                AppendLoginLog(candidateMessage);
+                UpdateLibrarySync(username, s => { s.ResolvedPackageCount = session.PackageInfo.Values.Count(x => x != null); s.CandidateAppCount = appList.Count; s.ScannedAppCount = 0; s.Message = candidateMessage + " 正在读取游戏详情…"; });
 
                 foreach (var appId in appList)
                 {
@@ -441,21 +481,33 @@ namespace SteamDl.Core
                     UpdateLibrarySync(username, s =>
                     {
                         s.ScannedAppCount++;
+                        s.KnownCandidateAppIds.Add(appId);
                         if (item != null && s.Items.All(x => x.AppId != item.AppId)) s.Items.Add(item);
                         s.Message = $"同步中：已检查 {s.ScannedAppCount}/{s.CandidateAppCount} 个应用，找到 {s.Items.Count} 个游戏。";
                     });
                 }
 
-                UpdateLibrarySync(username, s => { s.State = "done"; s.Message = $"游戏库同步完成，共 {s.Items.Count} 个游戏。"; });
+                var doneMessage = $"游戏库{(syncMode == "full" ? "全量" : "增量")}同步完成，共显示 {LibrarySyncItemCount(username)} 个游戏。";
+                AppendLoginLog(doneMessage);
+                UpdateLibrarySync(username, s => { s.State = "done"; s.LastSyncAt = DateTime.UtcNow.ToString("O"); s.Message = doneMessage; });
             }
             catch (Exception ex)
             {
+                AppendLoginLog("游戏库同步失败: " + ex.Message);
                 SetLibraryError(username, "游戏库同步失败: " + ex.Message);
             }
             finally
             {
                 try { session?.Disconnect(); }
                 catch { }
+            }
+        }
+
+        int LibrarySyncItemCount(string username)
+        {
+            lock (_sync)
+            {
+                return string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase) ? _librarySync.Items.Count : 0;
             }
         }
 
@@ -494,6 +546,8 @@ namespace SteamDl.Core
             {
                 ["username"] = _librarySync.Username,
                 ["state"] = _librarySync.State,
+                ["sync_mode"] = _librarySync.SyncMode,
+                ["last_sync_at"] = _librarySync.LastSyncAt,
                 ["items"] = items,
                 ["license_count"] = _librarySync.LicenseCount,
                 ["package_count"] = _librarySync.PackageCount,
@@ -932,7 +986,6 @@ namespace SteamDl.Core
             if (string.IsNullOrEmpty(line)) return;
             lock (_sync)
             {
-                if (_login.State == "idle") return;
                 var lines = (_login.Log ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
                 lines.Add(line);
                 if (lines.Count > MaxLogLines) lines = lines.Skip(lines.Count - MaxLogLines).ToList();

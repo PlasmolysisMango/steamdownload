@@ -65,6 +65,7 @@ export function App() {
   const [toast, setToast] = useState('');
   const [serviceOnline, setServiceOnline] = useState(true);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const autoLibrarySyncRef = useRef('');
 
   function setSelectedAccount(username: string) {
     const next = username.trim();
@@ -109,6 +110,15 @@ export function App() {
   useEffect(() => {
     if (loginState.state === 'done') setToast('');
   }, [loginState.state]);
+
+  useEffect(() => {
+    if (loginState.state !== 'done') { autoLibrarySyncRef.current = ''; return; }
+    if (!selectedAccount || !accounts.includes(selectedAccount)) return;
+    const key = `${selectedAccount}:${loginState.state}`;
+    if (autoLibrarySyncRef.current === key) return;
+    autoLibrarySyncRef.current = key;
+    api('/api/library/sync', { username: selectedAccount, mode: 'incremental' }).catch(() => {});
+  }, [loginState.state, selectedAccount, accounts.join('|')]);
 
   useEffect(() => {
     const updateNetwork = () => setServiceOnline(navigator.onLine);
@@ -180,11 +190,11 @@ export function App() {
 
     <main className="main" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       {toast && <div className="toast" onClick={() => setToast('')}>{toast}</div>}
-      {tab === 'accounts' && <AccountsPage accounts={accounts} accountDetails={accountDetails} loginState={loginState} selectedAccount={selectedAccount} setSelectedAccount={setSelectedAccount} refresh={refresh} setToast={setToast} />}
-      {tab === 'download' && (locked ? <LoginGate setTab={openTab} /> : <DownloadPage settings={settings} config={config} selectedAccount={selectedAccount} seed={downloadSeed} clearSeed={() => setDownloadSeed(null)} setToast={setToast} refresh={refresh} setActiveJob={setActiveJob} setTab={openTab} />)}
-      {tab === 'library' && (locked ? <LoginGate setTab={openTab} /> : <LibraryPage selectedAccount={selectedAccount} setToast={setToast} openDownload={openDownload} />)}
-      {tab === 'jobs' && <JobsPage jobs={jobs} activeJob={activeJob} setActiveJob={setActiveJob} refresh={refresh} setToast={setToast} />}
-      {tab === 'settings' && <SettingsPage settings={settings} config={config} setSettings={setSettings} setToast={setToast} loginState={loginState} activeJob={activeJob} jobs={jobs} setActiveJob={setActiveJob} refresh={refresh} />}
+      <div hidden={tab !== 'accounts'}><AccountsPage accounts={accounts} accountDetails={accountDetails} loginState={loginState} selectedAccount={selectedAccount} setSelectedAccount={setSelectedAccount} refresh={refresh} setToast={setToast} /></div>
+      <div hidden={tab !== 'download'}>{locked ? <LoginGate setTab={openTab} /> : <DownloadPage settings={settings} config={config} selectedAccount={selectedAccount} seed={downloadSeed} clearSeed={() => setDownloadSeed(null)} setToast={setToast} refresh={refresh} setActiveJob={setActiveJob} setTab={openTab} />}</div>
+      <div hidden={tab !== 'library'}>{locked ? <LoginGate setTab={openTab} /> : <LibraryPage selectedAccount={selectedAccount} setToast={setToast} openDownload={openDownload} />}</div>
+      <div hidden={tab !== 'jobs'}><JobsPage jobs={jobs} activeJob={activeJob} setActiveJob={setActiveJob} refresh={refresh} setToast={setToast} /></div>
+      <div hidden={tab !== 'settings'}><SettingsPage settings={settings} config={config} setSettings={setSettings} setToast={setToast} loginState={loginState} activeJob={activeJob} jobs={jobs} setActiveJob={setActiveJob} refresh={refresh} /></div>
     </main>
   </div>;
 }
@@ -333,52 +343,87 @@ function LibraryPage({ selectedAccount, setToast, openDownload }: { selectedAcco
   const [manualId, setManualId] = useState('');
   const [query, setQuery] = useState('');
   const [syncing, setSyncing] = useState(false);
-  const [progress, setProgress] = useState({ scanned: 0, total: 0, percent: 0, state: 'idle' });
+  const [progress, setProgress] = useState({ scanned: 0, total: 0, percent: 0, state: 'idle', mode: 'full' });
+  const [sortBy, setSortBy] = useState<'name' | 'app_id'>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const visibleGames = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return games;
-    return games.filter(g => g.app_id.includes(q) || g.name.toLowerCase().includes(q));
-  }, [games, query]);
+    const filtered = q ? games.filter(g => g.app_id.includes(q) || g.name.toLowerCase().includes(q)) : games;
+    return [...filtered].sort((a, b) => {
+      const value = sortBy === 'app_id' ? Number(a.app_id) - Number(b.app_id) : a.name.localeCompare(b.name, 'zh-Hans');
+      return sortDir === 'asc' ? value : -value;
+    });
+  }, [games, query, sortBy, sortDir]);
   function applyLibraryStatus(res: any) {
     const items = Array.isArray(res.items) ? res.items : [];
     const nextGames = items.map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir }));
     setGames(nextGames);
     setMessage(res.message || `已同步 ${nextGames.length} 个游戏`);
-    setProgress({ scanned: Number(res.scanned_app_count || 0), total: Number(res.app_count || 0), percent: Number(res.progress || 0), state: res.state || 'idle' });
+    setProgress({ scanned: Number(res.scanned_app_count || 0), total: Number(res.app_count || 0), percent: Number(res.progress || 0), state: res.state || 'idle', mode: res.sync_mode || 'full' });
+    setSyncing(res.state === 'running');
   }
 
-  async function sync() {
+  async function pollStatus() {
+    let res = await api<any>(`/api/library/status?username=${encodeURIComponent(selectedAccount)}`);
+    applyLibraryStatus(res);
+    while (res.state === 'running') {
+      await new Promise(resolve => setTimeout(resolve, 700));
+      res = await api<any>(`/api/library/status?username=${encodeURIComponent(selectedAccount)}`);
+      applyLibraryStatus(res);
+    }
+    return res;
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    async function restore() {
+      try {
+        let res = await api<any>(`/api/library/status?username=${encodeURIComponent(selectedAccount)}`);
+        if (cancelled) return;
+        applyLibraryStatus(res);
+        while (!cancelled && res.state === 'running') {
+          await new Promise(resolve => setTimeout(resolve, 700));
+          res = await api<any>(`/api/library/status?username=${encodeURIComponent(selectedAccount)}`);
+          if (!cancelled) applyLibraryStatus(res);
+        }
+      } catch {
+        if (!cancelled) setSyncing(false);
+      }
+    }
+    restore();
+    return () => { cancelled = true; };
+  }, [selectedAccount]);
+
+  async function sync(mode: 'full' | 'incremental') {
     setSyncing(true);
     setQuery('');
     try {
-      let res = await api<any>('/api/library/sync', { username: selectedAccount });
+      const res = await api<any>('/api/library/sync', { username: selectedAccount, mode, force_full_sync: mode === 'full' });
       applyLibraryStatus(res);
-      while (res.state === 'running') {
-        await new Promise(resolve => setTimeout(resolve, 700));
-        res = await api<any>(`/api/library/status?username=${encodeURIComponent(selectedAccount)}`);
-        applyLibraryStatus(res);
-      }
-      if (res.state === 'error') setToast(res.message || '游戏库同步失败');
+      const finalStatus = await pollStatus();
+      if (finalStatus.state === 'error') setToast(finalStatus.message || '游戏库同步失败');
     } catch (e: any) { setToast(e.message); }
     finally { setSyncing(false); }
   }
+  const modeText = progress.mode === 'incremental' ? '增量同步' : '全量同步';
   return <section className="grid two">
     <div className="card span2">
       <h3>游戏库</h3>
-      <p className="muted">当前账号：{selectedAccount}。同步后可直接选择游戏下载，也可以输入 AppID 快速跳转。</p>
-      <div className="row"><button disabled={syncing} onClick={sync}>{syncing ? '同步中…' : '同步库'}</button><input value={manualId} onChange={e => setManualId(e.target.value)} placeholder="输入 AppID，例如 730" /><button disabled={!manualId.trim()} onClick={() => openDownload({ kind: 'app', id: manualId.trim() })}>下载此 AppID</button></div>
-      {games.length > 0 && <input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" />}
+      <p className="muted">当前账号：{selectedAccount}。首次增量同步会自动按全量执行；后续增量同步仅检查新增候选应用。</p>
+      <div className="row"><button disabled={syncing} onClick={() => sync('incremental')}>{syncing ? '同步中…' : '增量同步'}</button><button disabled={syncing} onClick={() => sync('full')}>全量同步</button><input value={manualId} onChange={e => setManualId(e.target.value)} placeholder="输入 AppID，例如 730" /><button disabled={!manualId.trim()} onClick={() => openDownload({ kind: 'app', id: manualId.trim() })}>下载此 AppID</button></div>
+      <div className="libraryControls"><input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" /><select value={sortBy} onChange={e => setSortBy(e.target.value as 'name' | 'app_id')}><option value="name">按名称排序</option><option value="app_id">按 AppID 排序</option></select><select value={sortDir} onChange={e => setSortDir(e.target.value as 'asc' | 'desc')}><option value="asc">升序</option><option value="desc">降序</option></select><select value={viewMode} onChange={e => setViewMode(e.target.value as 'grid' | 'list')}><option value="grid">大图显示</option><option value="list">列表显示</option></select></div>
       {message && <p className="muted">{message}</p>}
       {(syncing || progress.total > 0) && <>
         <div className="bar" title="已检查候选应用 / 候选应用总数"><i style={{ width: `${progress.percent || 0}%` }} /></div>
-        <p className="muted">同步进度：已检查候选应用 {progress.scanned}/{progress.total || '?'} · 已显示 {games.length} 个游戏</p>
+        <p className="muted">{modeText}进度：已检查候选应用 {progress.scanned}/{progress.total || '?'} · 已显示 {games.length} 个游戏</p>
       </>}
     </div>
-    {games.length === 0 ? <div className="card span2"><p className="muted">{message || '尚未同步游戏库。点击“同步库”读取当前账号拥有的游戏，或直接输入 AppID 下载。'}</p></div> : visibleGames.length === 0 ? <div className="card span2"><p className="muted">当前搜索没有匹配的游戏。清空搜索框可查看已同步的全部游戏。</p></div> : visibleGames.map(game => <div className="card game" key={game.app_id}>
+    {games.length === 0 ? <div className="card span2"><p className="muted">{message || '尚未同步游戏库。点击“增量同步”会在首次自动全量读取当前账号拥有的游戏。'}</p></div> : visibleGames.length === 0 ? <div className="card span2"><p className="muted">当前搜索没有匹配的游戏。清空搜索框可查看已同步的全部游戏。</p></div> : <div className={`libraryResults span2 ${viewMode === 'list' ? 'list' : 'grid'}`}>{visibleGames.map(game => <div className="card game" key={game.app_id}>
       {game.header_image && <img src={game.header_image} />}
-      <h3>{game.name}</h3><p className="muted">AppID {game.app_id}</p>
+      <div className="gameText"><h3>{game.name}</h3><p className="muted">AppID {game.app_id}</p></div>
       <button className="primary block" onClick={() => openDownload({ kind: 'app', id: game.app_id, name: game.name, install_dir: game.install_dir || game.installdir })}>选择并下载</button>
-    </div>)}
+    </div>)}</div>}
   </section>;
 }
 

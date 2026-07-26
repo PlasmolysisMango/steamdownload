@@ -344,7 +344,10 @@ namespace SteamDl.Core
                     {
                         var body = await ReadJsonAsync(req);
                         var username = body?["username"]?.GetValue<string>() ?? req.QueryString["username"];
-                        await WriteJsonAsync(ctx, 200, JobManager.Instance.StartLibrarySync(username));
+                        var forceFullSync = body?["force_full_sync"]?.GetValue<bool>() == true ||
+                            string.Equals(body?["mode"]?.GetValue<string>(), "full", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(req.QueryString["mode"], "full", StringComparison.OrdinalIgnoreCase);
+                        await WriteJsonAsync(ctx, 200, JobManager.Instance.StartLibrarySync(username, forceFullSync));
                         break;
                     }
 
