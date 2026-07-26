@@ -107,6 +107,10 @@ export function App() {
   }, [activeJob?.job_id]);
 
   useEffect(() => {
+    if (loginState.state === 'done') setToast('');
+  }, [loginState.state]);
+
+  useEffect(() => {
     const updateNetwork = () => setServiceOnline(navigator.onLine);
     window.addEventListener('online', updateNetwork);
     window.addEventListener('offline', updateNetwork);
@@ -371,6 +375,10 @@ function AccountsPage({ accounts, accountDetails, loginState, selectedAccount, s
     for (const account of accounts) names.add(account);
     return Array.from(names).sort((a, b) => a.localeCompare(b));
   }, [accounts, accountDetails]);
+  useEffect(() => {
+    if (loginState.state !== 'waiting_input') setAnswer('');
+  }, [loginState.state, loginState.prompt]);
+
   async function logout(username: string) {
     try {
       await api('/api/accounts/logout', { username });

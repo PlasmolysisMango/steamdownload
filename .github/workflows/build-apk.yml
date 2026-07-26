@@ -39,7 +39,7 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
     env:
-      # PR 上不使用签名密钥，只构建 Debug；master/tag/手动触发才使用 Release + 签名
+      # fork PR 通常拿不到 secrets；只要当前事件能读取到 keystore Secret，Debug/Release 都使用同一份签名
       CONFIG: ${{ github.event_name == 'pull_request' && 'Debug' || (inputs.config || 'Release') }}
       HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     outputs:
@@ -85,15 +85,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Prepare release keystore
-        if: env.HAS_RELEASE_KEYSTORE == 'true' && env.CONFIG == 'Release'
+      - name: Prepare signing keystore
+        if: env.HAS_RELEASE_KEYSTORE == 'true'
         run: |
           mkdir -p .tools/keystore
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > .tools/keystore/steamdl-release.keystore
 
       - name: Build APK
         env:
-          ANDROID_KEYSTORE: ${{ (env.HAS_RELEASE_KEYSTORE == 'true' && env.CONFIG == 'Release') && '.tools/keystore/steamdl-release.keystore' || '' }}
+          ANDROID_KEYSTORE: ${{ env.HAS_RELEASE_KEYSTORE == 'true' && '.tools/keystore/steamdl-release.keystore' || '' }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_STORE_PASS: ${{ secrets.ANDROID_STORE_PASS }}
           ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}

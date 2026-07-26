@@ -153,9 +153,9 @@ Release 签名（可选，未配置则脚本会在 CI 里生成一个临时本�
    ANDROID_KEY_PASS
 ```
 
-配置好这些 secrets 后，`push master` / `push tag` / 手动触发且选择 Release 时会使用该 keystore 签名；未配置时 Release 构建仍会成功，但每次生成的临时 keystore 不同，产物无法覆盖升级，仅用于验证构建流程。构建完成后在该次 workflow run 的 Artifacts 中下载 `steamdl-apk-<config>-<sha>`，里面是生成的 `.apk` 文件。
+配置好这些 secrets 后，`push master` / `push tag` / 手动触发构建会使用该 keystore 签名；只要 Secret 存在，Debug 和 Release 都会使用同一份签名，方便本地/CI 产物互相覆盖安装。未配置时 Release 构建仍会成功，但每次生成的临时 keystore 不同，产物无法覆盖升级，仅用于验证构建流程。构建完成后在该次 workflow run 的 Artifacts 中下载 `steamdl-apk-<config>-<sha>`，里面是生成的 `.apk` 文件。
 
-本地 Release 构建也会优先读取 `.tools/keystore/github-actions-secrets.env`，复用同一套 GitHub Actions Secrets。也就是说，生成好该文件后直接执行 `node build.mjs build-apk --config=Release` 即可使用正式 keystore；如果 `.tools/keystore/steamdl-release.keystore` 不存在，脚本会自动从文件里的 `ANDROID_KEYSTORE_BASE64` 还原。需要使用其他文件时可传 `--signing-env=<file>` 或设置 `ANDROID_SIGNING_ENV=<file>`。
+本地构建也会优先读取 `.tools/keystore/github-actions-secrets.env`，复用同一套 GitHub Actions Secrets。也就是说，生成好该文件后直接执行 `node build.mjs build-apk --config=Debug` 或 `node build.mjs build-apk --config=Release` 都会使用正式 keystore；如果 `.tools/keystore/steamdl-release.keystore` 不存在，脚本会自动从文件里的 `ANDROID_KEYSTORE_BASE64` 还原。需要使用其他文件时可传 `--signing-env=<file>` 或设置 `ANDROID_SIGNING_ENV=<file>`。
 
 ### 发布到 GitHub Release 页面下载
 

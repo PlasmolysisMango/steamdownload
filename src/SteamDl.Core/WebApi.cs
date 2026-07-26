@@ -298,7 +298,7 @@ namespace SteamDl.Core
                     {
                         var body = await ReadJsonAsync(req);
                         var answer = body?["answer"]?.GetValue<string>() ?? "";
-                        if (!JobManager.Instance.SupplyLoginInput(answer))
+                        if (!await JobManager.Instance.SupplyLoginInputAndWaitAsync(answer))
                         {
                             await WriteJsonAsync(ctx, 409, Error("当前没有等待输入的登录流程"));
                             break;

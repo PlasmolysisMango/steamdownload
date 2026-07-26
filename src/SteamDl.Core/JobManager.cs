@@ -64,7 +64,7 @@ namespace SteamDl.Core
                         return;
                     }
 
-                    if (_login.State == "running")
+                    if (_login.State is "running" or "waiting_input")
                     {
                         _login.State = "waiting_input";
                         _login.Prompt = label;
@@ -494,6 +494,32 @@ namespace SteamDl.Core
             }
 
             ConsoleRelay.Instance.SupplyInput(answer ?? string.Empty);
+            return true;
+        }
+
+        public async Task<bool> SupplyLoginInputAndWaitAsync(string answer)
+        {
+            string prompt;
+            lock (_sync)
+            {
+                if (_login.State != "waiting_input") return false;
+                prompt = _login.Prompt ?? "";
+            }
+
+            ConsoleRelay.Instance.SupplyInput(answer ?? string.Empty);
+
+            for (var i = 0; i < 30; i++)
+            {
+                await Task.Delay(50).ConfigureAwait(false);
+                lock (_sync)
+                {
+                    if (_login.State != "waiting_input" || !string.Equals(_login.Prompt ?? "", prompt, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+
             return true;
         }
 
