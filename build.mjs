@@ -67,6 +67,9 @@ const keyPass = opts.keyPass || process.env.ANDROID_KEY_PASS || storePass;
 const forceWebBuild = opts.forceWeb === 'true' || process.env.FORCE_WEB_BUILD === '1';
 const forceRestore = opts.forceRestore === 'true' || process.env.FORCE_RESTORE === '1';
 const forceApkBuild = opts.forceApk === 'true' || process.env.FORCE_APK_BUILD === '1';
+// 提前声明探测缓存标记，避免 main() 在模块底部声明执行前就同步访问到它们而触发 TDZ 报错。
+let nugetSourcesProbed = false;
+let npmRegistryProbed = false;
 
 main().catch(err => {
   console.error(`\nERROR: ${err.message}`);
@@ -524,9 +527,6 @@ async function reorderReachableFirst(label, urls) {
   }
   return reachable;
 }
-
-let nugetSourcesProbed = false;
-let npmRegistryProbed = false;
 
 // 在真正执行 dotnet restore 之前探测 NuGet 源；未显式指定 --nuget-source 时，会自动补充官方源/国内镜像作为退避候选。
 async function ensureNugetSourcesProbed() {
