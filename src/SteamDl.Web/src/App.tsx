@@ -342,8 +342,11 @@ function LibraryPage({ selectedAccount, setToast, openDownload }: { selectedAcco
     setSyncing(true);
     try {
       const res = await api<any>(`/api/library?username=${encodeURIComponent(selectedAccount)}`);
-      setGames((res.items || []).map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir })));
-      setMessage(res.message || '库同步完成');
+      const items = Array.isArray(res.items) ? res.items : [];
+      const nextGames = items.map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir }));
+      setGames(nextGames);
+      setQuery('');
+      setMessage(res.message || `库同步完成，共 ${nextGames.length} 个应用`);
     } catch (e: any) { setToast(e.message); }
     finally { setSyncing(false); }
   }
@@ -355,7 +358,7 @@ function LibraryPage({ selectedAccount, setToast, openDownload }: { selectedAcco
       {games.length > 0 && <input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" />}
       {message && <p className="muted">{message}</p>}
     </div>
-    {games.length === 0 ? <div className="card span2"><p className="muted">尚未同步游戏库。点击“同步库”读取当前账号拥有的游戏，或直接输入 AppID 下载。</p></div> : visibleGames.map(game => <div className="card game" key={game.app_id}>
+    {games.length === 0 ? <div className="card span2"><p className="muted">{message || '尚未同步游戏库。点击“同步库”读取当前账号拥有的游戏，或直接输入 AppID 下载。'}</p></div> : visibleGames.length === 0 ? <div className="card span2"><p className="muted">当前搜索没有匹配的游戏。清空搜索框可查看已同步的全部游戏。</p></div> : visibleGames.map(game => <div className="card game" key={game.app_id}>
       {game.header_image && <img src={game.header_image} />}
       <h3>{game.name}</h3><p className="muted">AppID {game.app_id}</p>
       <button className="primary block" onClick={() => openDownload({ kind: 'app', id: game.app_id, name: game.name, install_dir: game.install_dir || game.installdir })}>选择并下载</button>

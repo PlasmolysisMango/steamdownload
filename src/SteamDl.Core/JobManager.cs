@@ -357,11 +357,7 @@ namespace SteamDl.Core
                 var appIds = new SortedSet<uint>();
                 foreach (var package in session.PackageInfo.Values.Where(x => x != null))
                 {
-                    foreach (var child in package.KeyValues["appids"].Children)
-                    {
-                        var appId = child.AsUnsignedInteger();
-                        if (appId > 0) appIds.Add(appId);
-                    }
+                    AddPackageAppIds(package.KeyValues["appids"], appIds);
                 }
 
                 foreach (var appId in appIds.Take(500))
@@ -392,12 +388,26 @@ namespace SteamDl.Core
                     });
                 }
 
+                var licenseCount = session.Licenses?.Count ?? 0;
+                var packageCount = packageIds.Count;
+                var resolvedPackageCount = session.PackageInfo.Values.Count(x => x != null);
+                var message = appIds.Count == 0
+                    ? $"已读取 {licenseCount} 个 license、{resolvedPackageCount}/{packageCount} 个 package，但未从 package 信息中解析到可下载 AppID。"
+                    : appIds.Count > 500
+                        ? $"已同步 {appIds.Count} 个应用，前 500 个应用已加载名称，其余应用会显示 AppID。"
+                        : $"游戏库同步完成，共 {appIds.Count} 个应用。";
+
                 return new JsonObject
                 {
                     ["username"] = username,
                     ["items"] = items,
+                    ["license_count"] = licenseCount,
+                    ["package_count"] = packageCount,
+                    ["resolved_package_count"] = resolvedPackageCount,
+                    ["app_count"] = appIds.Count,
+                    ["item_count"] = items.Count,
                     ["details_pending"] = appIds.Count > 500,
-                    ["message"] = appIds.Count > 500 ? "已同步游戏库，前 500 个应用已加载名称，其余应用会显示 AppID。" : "游戏库同步完成",
+                    ["message"] = message,
                 };
             }
             catch (Exception ex)
@@ -414,6 +424,17 @@ namespace SteamDl.Core
             {
                 try { session?.Disconnect(); }
                 catch { }
+            }
+        }
+
+        static void AddPackageAppIds(KeyValue node, ISet<uint> appIds)
+        {
+            if (node == null || node == KeyValue.Invalid) return;
+            foreach (var child in node.Children)
+            {
+                var appId = child.AsUnsignedInteger();
+                if (appId == 0 && uint.TryParse(child.Name, out var idFromName)) appId = idFromName;
+                if (appId > 0) appIds.Add(appId);
             }
         }
 
