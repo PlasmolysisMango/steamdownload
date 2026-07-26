@@ -147,7 +147,9 @@ function findOnPath(name) {
 function run(command, commandArgs = [], options = {}) {
   console.log(`> ${command} ${commandArgs.map(quoteArg).join(' ')}`);
   const useShell = isWin && /\.(bat|cmd)$/i.test(command);
-  const res = spawnSync(command, commandArgs, {
+  // Windows cmd.exe mis-parses paths with spaces; wrap in extra quotes to protect.
+  const shellCommand = (useShell && command.includes(' ')) ? `"${command}"` : command;
+  const res = spawnSync(shellCommand, commandArgs, {
     cwd: options.cwd || root,
     stdio: options.stdio || 'inherit',
     input: options.input,
@@ -161,7 +163,8 @@ function run(command, commandArgs = [], options = {}) {
 
 function runCapture(command, commandArgs = [], options = {}) {
   const useShell = isWin && /\.(bat|cmd)$/i.test(command);
-  const res = spawnSync(command, commandArgs, {
+  const shellCommand = (useShell && command.includes(' ')) ? `"${command}"` : command;
+  const res = spawnSync(shellCommand, commandArgs, {
     cwd: options.cwd || root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
