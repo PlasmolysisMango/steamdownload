@@ -147,7 +147,7 @@ Release 签名（可选，未配置则脚本会在 CI 里生成一个临时本�
 1. 本地生成正式 keystore: keytool -genkeypair -v -keystore steamdl-release.keystore -alias steamdl -keyalg RSA -keysize 2048 -validity 10000
 2. 转 base64: base64 -w0 steamdl-release.keystore
 3. 在仓库 Settings -> Secrets and variables -> Actions 中添加:
-   ANDROID_KEYSTORE_BASE64  # 上一步 base64 结果
+   ANDROID_KEYSTORE_BASE64  # 只填 github-actions-secrets.env 中 ANDROID_KEYSTORE_BASE64= 右侧的值
    ANDROID_KEY_ALIAS
    ANDROID_STORE_PASS
    ANDROID_KEY_PASS
@@ -156,6 +156,8 @@ Release 签名（可选，未配置则脚本会在 CI 里生成一个临时本�
 配置好这些 secrets 后，`push master` / `push tag` / 手动触发构建会使用该 keystore 签名；只要 Secret 存在，Debug 和 Release 都会使用同一份签名，方便本地/CI 产物互相覆盖安装。未配置时 Release 构建仍会成功，但每次生成的临时 keystore 不同，产物无法覆盖升级，仅用于验证构建流程。构建完成后在该次 workflow run 的 Artifacts 中下载 `steamdl-apk-<config>-<sha>`，里面是生成的 `.apk` 文件。
 
 本地构建也会优先读取 `.tools/keystore/github-actions-secrets.env`，复用同一套 GitHub Actions Secrets。也就是说，生成好该文件后直接执行 `node build.mjs build-apk --config=Debug` 或 `node build.mjs build-apk --config=Release` 都会使用正式 keystore；如果 `.tools/keystore/steamdl-release.keystore` 不存在，脚本会自动从文件里的 `ANDROID_KEYSTORE_BASE64` 还原。需要使用其他文件时可传 `--signing-env=<file>` 或设置 `ANDROID_SIGNING_ENV=<file>`。
+
+如果 GitHub Actions 在 `Prepare signing keystore` 步骤提示 `ANDROID_KEYSTORE_BASE64 不是有效 base64`，通常是 Secret 值复制错了。请打开 `.tools/keystore/github-actions-secrets.env`，把 `ANDROID_KEYSTORE_BASE64=` 右侧那一整行作为 Secret Value；如果把整行 `ANDROID_KEYSTORE_BASE64=...` 都粘进 Value，workflow 会直接报错。
 
 ### 发布到 GitHub Release 页面下载
 

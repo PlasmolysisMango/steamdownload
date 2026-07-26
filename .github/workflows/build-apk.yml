@@ -87,9 +87,36 @@ jobs:
 
       - name: Prepare signing keystore
         if: env.HAS_RELEASE_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           mkdir -p .tools/keystore
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > .tools/keystore/steamdl-release.keystore
+          python3 - <<'PY'
+          import base64
+          import os
+          import sys
+
+          raw = (os.environ.get('ANDROID_KEYSTORE_BASE64') or '').strip()
+          if raw.startswith('ANDROID_KEYSTORE_BASE64=') or '\nANDROID_KEYSTORE_BASE64=' in raw:
+              print('::error::ANDROID_KEYSTORE_BASE64 Secret 填写错误：Secret Name 应为 ANDROID_KEYSTORE_BASE64，Secret Value 只能填写等号右侧的 base64 内容，不要包含 ANDROID_KEYSTORE_BASE64= 前缀。')
+              sys.exit(1)
+          raw = raw.strip('"\'')
+          compact = ''.join(raw.split())
+          if not compact:
+              print('::error::ANDROID_KEYSTORE_BASE64 Secret 为空')
+              sys.exit(1)
+          try:
+              data = base64.b64decode(compact, validate=True)
+          except Exception:
+              print('::error::ANDROID_KEYSTORE_BASE64 不是有效 base64。请只填写 github-actions-secrets.env 中 ANDROID_KEYSTORE_BASE64= 右侧的值；不要包含空格或截断。')
+              sys.exit(1)
+          if len(data) < 512:
+              print('::error::解码后的 keystore 过小，Secret 可能被截断或复制错误')
+              sys.exit(1)
+          with open('.tools/keystore/steamdl-release.keystore', 'wb') as f:
+              f.write(data)
+          print(f'Keystore restored: {len(data)} bytes')
+          PY
 
       - name: Build APK
         env:
