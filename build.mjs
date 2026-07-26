@@ -63,7 +63,8 @@ const apkOut = path.join(root, 'artifacts', 'apk');
 const localSigningEnvFile = opts.signingEnv || process.env.ANDROID_SIGNING_ENV || path.join(toolsDir, 'keystore', 'github-actions-secrets.env');
 const localSigningEnv = readEnvFile(localSigningEnvFile);
 const keystoreBase64 = opts.keystoreBase64 || process.env.ANDROID_KEYSTORE_BASE64 || localSigningEnv.ANDROID_KEYSTORE_BASE64 || '';
-const keystore = opts.keystore || process.env.ANDROID_KEYSTORE || localSigningEnv.ANDROID_KEYSTORE || path.join(toolsDir, 'keystore', 'steamdl-release.keystore');
+const configuredKeystore = opts.keystore || process.env.ANDROID_KEYSTORE || localSigningEnv.ANDROID_KEYSTORE || path.join(toolsDir, 'keystore', 'steamdl-release.keystore');
+const keystore = resolveRootPath(configuredKeystore);
 const keyAlias = opts.keyAlias || process.env.ANDROID_KEY_ALIAS || localSigningEnv.ANDROID_KEY_ALIAS || 'steamdl';
 const storePass = opts.storePass || process.env.ANDROID_STORE_PASS || localSigningEnv.ANDROID_STORE_PASS || 'steamdl-changeit';
 const keyPass = opts.keyPass || process.env.ANDROID_KEY_PASS || localSigningEnv.ANDROID_KEY_PASS || storePass;
@@ -140,6 +141,11 @@ function readEnvFile(file) {
     env[key] = value;
   }
   return env;
+}
+
+function resolveRootPath(value) {
+  if (!value) return value;
+  return path.isAbsolute(value) ? value : path.resolve(root, value);
 }
 
 function parseList(value, fallback) {

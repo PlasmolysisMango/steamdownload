@@ -120,7 +120,7 @@ jobs:
 
       - name: Build APK
         env:
-          ANDROID_KEYSTORE: ${{ env.HAS_RELEASE_KEYSTORE == 'true' && '.tools/keystore/steamdl-release.keystore' || '' }}
+          ANDROID_KEYSTORE: ${{ env.HAS_RELEASE_KEYSTORE == 'true' && format('{0}/.tools/keystore/steamdl-release.keystore', github.workspace) || '' }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_STORE_PASS: ${{ secrets.ANDROID_STORE_PASS }}
           ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
