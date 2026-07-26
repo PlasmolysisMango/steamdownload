@@ -333,20 +333,32 @@ function LibraryPage({ selectedAccount, setToast, openDownload }: { selectedAcco
   const [manualId, setManualId] = useState('');
   const [query, setQuery] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const [progress, setProgress] = useState({ scanned: 0, total: 0, percent: 0, state: 'idle' });
   const visibleGames = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return games;
     return games.filter(g => g.app_id.includes(q) || g.name.toLowerCase().includes(q));
   }, [games, query]);
+  function applyLibraryStatus(res: any) {
+    const items = Array.isArray(res.items) ? res.items : [];
+    const nextGames = items.map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir }));
+    setGames(nextGames);
+    setMessage(res.message || `已同步 ${nextGames.length} 个游戏`);
+    setProgress({ scanned: Number(res.scanned_app_count || 0), total: Number(res.app_count || 0), percent: Number(res.progress || 0), state: res.state || 'idle' });
+  }
+
   async function sync() {
     setSyncing(true);
+    setQuery('');
     try {
-      const res = await api<any>(`/api/library?username=${encodeURIComponent(selectedAccount)}`);
-      const items = Array.isArray(res.items) ? res.items : [];
-      const nextGames = items.map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir }));
-      setGames(nextGames);
-      setQuery('');
-      setMessage(res.message || `库同步完成，共 ${nextGames.length} 个应用`);
+      let res = await api<any>('/api/library/sync', { username: selectedAccount });
+      applyLibraryStatus(res);
+      while (res.state === 'running') {
+        await new Promise(resolve => setTimeout(resolve, 700));
+        res = await api<any>(`/api/library/status?username=${encodeURIComponent(selectedAccount)}`);
+        applyLibraryStatus(res);
+      }
+      if (res.state === 'error') setToast(res.message || '游戏库同步失败');
     } catch (e: any) { setToast(e.message); }
     finally { setSyncing(false); }
   }
@@ -357,6 +369,10 @@ function LibraryPage({ selectedAccount, setToast, openDownload }: { selectedAcco
       <div className="row"><button disabled={syncing} onClick={sync}>{syncing ? '同步中…' : '同步库'}</button><input value={manualId} onChange={e => setManualId(e.target.value)} placeholder="输入 AppID，例如 730" /><button disabled={!manualId.trim()} onClick={() => openDownload({ kind: 'app', id: manualId.trim() })}>下载此 AppID</button></div>
       {games.length > 0 && <input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" />}
       {message && <p className="muted">{message}</p>}
+      {(syncing || progress.total > 0) && <>
+        <div className="bar" title="已检查候选应用 / 候选应用总数"><i style={{ width: `${progress.percent || 0}%` }} /></div>
+        <p className="muted">同步进度：已检查候选应用 {progress.scanned}/{progress.total || '?'} · 已显示 {games.length} 个游戏</p>
+      </>}
     </div>
     {games.length === 0 ? <div className="card span2"><p className="muted">{message || '尚未同步游戏库。点击“同步库”读取当前账号拥有的游戏，或直接输入 AppID 下载。'}</p></div> : visibleGames.length === 0 ? <div className="card span2"><p className="muted">当前搜索没有匹配的游戏。清空搜索框可查看已同步的全部游戏。</p></div> : visibleGames.map(game => <div className="card game" key={game.app_id}>
       {game.header_image && <img src={game.header_image} />}

@@ -340,6 +340,21 @@ namespace SteamDl.Core
                         break;
                     }
 
+                    case ("POST", "/api/library/sync"):
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var username = body?["username"]?.GetValue<string>() ?? req.QueryString["username"];
+                        await WriteJsonAsync(ctx, 200, JobManager.Instance.StartLibrarySync(username));
+                        break;
+                    }
+
+                    case ("GET", "/api/library/status"):
+                    {
+                        var username = req.QueryString["username"];
+                        await WriteJsonAsync(ctx, 200, JobManager.Instance.LibrarySyncStatusJson(username));
+                        break;
+                    }
+
                     case ("GET", "/api/settings"):
                         await WriteJsonAsync(ctx, 200, SettingsJson(JobStore.Instance.GetSettings()));
                         break;
