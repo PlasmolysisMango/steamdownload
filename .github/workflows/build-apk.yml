@@ -32,7 +32,7 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
     env:
-      # PR 上不使用签名密钥，只构建 Debug；main/tag/手动触发才使用 Release + 签名
+      # PR 上不使用签名密钥，只构建 Debug；master/tag/手动触发才使用 Release + 签名
       CONFIG: ${{ github.event_name == 'pull_request' && 'Debug' || (inputs.config || 'Release') }}
       HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
 

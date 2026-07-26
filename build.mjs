@@ -18,23 +18,36 @@ const args = process.argv.slice(2);
 const task = (args.find(a => !a.startsWith('--')) || 'help').toLowerCase();
 const opts = parseOptions(args.filter(a => a.startsWith('--')));
 
-const defaultNugetSources = [
-  'https://repo.huaweicloud.com/repository/nuget/v3/index.json',
-  'https://api.nuget.org/v3/index.json',
-];
+// 默认全部走官方源；只有显式配置 --cn-mirror=true / CN_MIRROR=1，或直接指定具体镜像参数，才优先使用国内源。
+const useCnMirror = opts.cnMirror === 'true' || process.env.CN_MIRROR === '1';
+const officialNugetSource = 'https://api.nuget.org/v3/index.json';
+const cnNugetSource = 'https://repo.huaweicloud.com/repository/nuget/v3/index.json';
+const defaultNugetSources = useCnMirror ? [cnNugetSource, officialNugetSource] : [officialNugetSource];
+const officialNpmRegistry = 'https://registry.npmjs.org';
+const cnNpmRegistry = 'https://registry.npmmirror.com';
+const officialWebDockerImage = 'node:22-bookworm';
+const cnWebDockerImage = 'docker.m.daocloud.io/library/node:22-bookworm';
+const officialDotnetDockerImage = 'mcr.microsoft.com/dotnet/sdk:9.0';
+const cnDotnetDockerImage = 'm.daocloud.io/mcr.microsoft.com/dotnet/sdk:9.0';
 const config = opts.config || process.env.CONFIG || 'Release';
 const port = opts.port || process.env.PORT || '8630';
 const runtime = opts.runtime || process.env.RUNTIME || (isWin ? 'win-x64' : isMac ? 'osx-x64' : 'linux-x64');
 const dotnetChannel = opts.dotnetChannel || process.env.DOTNET_CHANNEL || '9.0';
 const androidApi = opts.androidApi || process.env.ANDROID_API || '35';
 const androidBuildTools = opts.androidBuildTools || process.env.ANDROID_BUILD_TOOLS || '35.0.0';
-const nugetSources = parseList(opts.nugetSource || process.env.NUGET_SOURCE, defaultNugetSources);
+const userConfiguredNugetSource = Boolean(opts.nugetSource || process.env.NUGET_SOURCE);
+let nugetSources = parseList(opts.nugetSource || process.env.NUGET_SOURCE, defaultNugetSources);
 const jdkUrl = opts.jdkUrl || process.env.JDK_URL || '';
 const androidCmdlineToolsUrl = opts.androidCmdlineToolsUrl || process.env.ANDROID_CMDLINE_TOOLS_URL || '';
 const jdkVersion = opts.jdkVersion || process.env.JDK_VERSION || '17.0.19_10';
-const npmRegistry = opts.npmRegistry || process.env.NPM_REGISTRY || process.env.NPM_CONFIG_REGISTRY || 'https://registry.npmmirror.com';
-const webDockerImage = opts.webDockerImage || process.env.WEB_DOCKER_IMAGE || 'docker.m.daocloud.io/library/node:22-bookworm';
-const dotnetDockerImage = opts.dotnetDockerImage || process.env.DOTNET_DOCKER_IMAGE || 'm.daocloud.io/mcr.microsoft.com/dotnet/sdk:9.0';
+const userConfiguredNpmRegistry = Boolean(opts.npmRegistry || process.env.NPM_REGISTRY || process.env.NPM_CONFIG_REGISTRY);
+let npmRegistry = opts.npmRegistry || process.env.NPM_REGISTRY || process.env.NPM_CONFIG_REGISTRY || (useCnMirror ? cnNpmRegistry : officialNpmRegistry);
+const webDockerImage = opts.webDockerImage || process.env.WEB_DOCKER_IMAGE || (useCnMirror ? cnWebDockerImage : officialWebDockerImage);
+const dotnetDockerImage = opts.dotnetDockerImage || process.env.DOTNET_DOCKER_IMAGE || (useCnMirror ? cnDotnetDockerImage : officialDotnetDockerImage);
+// 源探测参数：默认开启，可用 --skip-probe=true / SKIP_SOURCE_PROBE=1 关闭。
+const skipSourceProbe = opts.skipProbe === 'true' || process.env.SKIP_SOURCE_PROBE === '1';
+const probeTimeoutMs = Number(opts.probeTimeout || process.env.SOURCE_PROBE_TIMEOUT || 4000);
+const downloadTimeoutMs = Number(opts.downloadTimeout || process.env.DOWNLOAD_TIMEOUT || 20000);
 
 const toolsDir = path.join(root, '.tools');
 const localDotnetDir = path.join(toolsDir, isWin ? 'dotnet-win' : 'dotnet');
@@ -91,7 +104,7 @@ async function main() {
 }
 
 function help() {
-  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build-web\n  node build.mjs docker-build-web\n  node build.mjs build\n  node build.mjs docker-build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs docker-publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --nuget-source=${nugetSources.join(',')}\n  node build.mjs build-apk --keystore=/path/release.keystore --key-alias=steamdl --store-pass=*** --key-pass=***\n  node build.mjs docker-build-apk --config=Release\n  node build.mjs clean\n  node build.mjs clean-artifacts\n\nDownload/build source options:\n  --nuget-source=<url[,url...]> or NUGET_SOURCE=<url[,url...]>\n  --npm-registry=${npmRegistry} or NPM_REGISTRY=${npmRegistry}\n  --jdk-url=<url> or JDK_URL=<url>\n  --android-cmdline-tools-url=<url> or ANDROID_CMDLINE_TOOLS_URL=<url>\n  --jdk-version=17.0.19_10 or JDK_VERSION=17.0.19_10\n  --web-docker-image=${webDockerImage} or WEB_DOCKER_IMAGE=${webDockerImage}\n  --dotnet-docker-image=${dotnetDockerImage} or DOTNET_DOCKER_IMAGE=${dotnetDockerImage}\n  --force-web=true or FORCE_WEB_BUILD=1\n  --force-restore=true or FORCE_RESTORE=1\n  --force-apk=true or FORCE_APK_BUILD=1\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  NuGet sources default to domestic mirrors first: ${nugetSources.join(' -> ')}.\n  npm registry defaults to ${npmRegistry}.\n  JDK and Android cmdline-tools downloads try domestic mirrors first, then official URLs.\n  Release APKs are signed. If no keystore is provided, a local keystore is generated at .tools/keystore/.\n  install-deps installs/restores Web npm, .NET SDK, NuGet packages, JDK, Android SDK and Android workload.\n  Incremental builds skip fresh Web output, fresh Android restore assets and fresh APK output unless force flags are used.\n  Non-docker commands always use local toolchain. Docker is only used by explicit docker-* commands.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n`);
+  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build-web\n  node build.mjs docker-build-web\n  node build.mjs build\n  node build.mjs docker-build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs docker-publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --nuget-source=${nugetSources.join(',')}\n  node build.mjs build-apk --keystore=/path/release.keystore --key-alias=steamdl --store-pass=*** --key-pass=***\n  node build.mjs docker-build-apk --config=Release\n  node build.mjs clean\n  node build.mjs clean-artifacts\n\nDownload/build source options:\n  --cn-mirror=true or CN_MIRROR=1 (\u4f18\u5148\u4f7f\u7528\u56fd\u5185\u955c\u50cf\uff0c\u9ed8\u8ba4\u5173\u95ed)\n  --nuget-source=<url[,url...]> or NUGET_SOURCE=<url[,url...]>\n  --npm-registry=${npmRegistry} or NPM_REGISTRY=${npmRegistry}\n  --jdk-url=<url> or JDK_URL=<url>\n  --android-cmdline-tools-url=<url> or ANDROID_CMDLINE_TOOLS_URL=<url>\n  --jdk-version=17.0.19_10 or JDK_VERSION=17.0.19_10\n  --web-docker-image=${webDockerImage} or WEB_DOCKER_IMAGE=${webDockerImage}\n  --dotnet-docker-image=${dotnetDockerImage} or DOTNET_DOCKER_IMAGE=${dotnetDockerImage}\n  --force-web=true or FORCE_WEB_BUILD=1\n  --force-restore=true or FORCE_RESTORE=1\n  --force-apk=true or FORCE_APK_BUILD=1\n  --skip-probe=true or SKIP_SOURCE_PROBE=1 (关闭构建前的源可达性探测)\n  --probe-timeout=4000 or SOURCE_PROBE_TIMEOUT=4000 (单个源探测超时毫秒)\n  --download-timeout=20000 or DOWNLOAD_TIMEOUT=20000 (单次下载无活动超时毫秒)\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  All sources default to official endpoints: NuGet=${nugetSources.join(' -> ')}, npm=${npmRegistry}.\n  Pass --cn-mirror=true (or CN_MIRROR=1) to prefer domestic mirrors for NuGet/npm/JDK/Android cmdline-tools/Docker images.\n  Any single source can still be overridden explicitly (--nuget-source/--npm-registry/--jdk-url/--android-cmdline-tools-url/--web-docker-image/--dotnet-docker-image) regardless of --cn-mirror.\n  Before build/install-deps/restore actually run, NuGet/npm/JDK/Android cmdline-tools sources are probed with a short HEAD request; unreachable ones are pushed to the back and (unless explicitly overridden) official/mirror fallbacks are auto-added so a dead source fails fast instead of hanging.\n  Release APKs are signed. If no keystore is provided, a local keystore is generated at .tools/keystore/.\n  install-deps installs/restores Web npm, .NET SDK, NuGet packages, JDK, Android SDK and Android workload.\n  Incremental builds skip fresh Web output, fresh Android restore assets and fresh APK output unless force flags are used.\n  Non-docker commands always use local toolchain. Docker is only used by explicit docker-* commands.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n`);
 }
 
 function parseOptions(optionArgs) {
@@ -331,23 +344,24 @@ function writeApkStamp() {
   fs.writeFileSync(stamp, apkStampValue());
 }
 
-function buildWeb() {
+async function buildWeb() {
   if (!exists(path.join(webProject, 'package.json'))) return;
   if (isWebOutputFresh()) {
     section('跳过 React/Vite Web UI 构建');
     console.log('Web 产物未过期。如需强制重建，传入 --force-web=true 或 FORCE_WEB_BUILD=1。');
     return;
   }
-  installWebDeps();
+  await installWebDeps();
   run(npmCommand(), ['run', 'build'], { cwd: webProject, env: npmEnv() });
 }
 
-function installWebDeps() {
+async function installWebDeps() {
   if (!exists(path.join(webProject, 'package.json'))) return;
   section('安装/检查 React/Vite Web UI 依赖');
   const npm = npmCommand();
   if (!npm) throw new Error('构建 React/Vite 前端需要本机 npm。若要使用 Docker，请执行 docker-build-web 或 docker-build-apk。');
   if (!exists(path.join(webProject, 'node_modules'))) {
+    await ensureNpmRegistryProbed();
     run(npm, ['install', '--registry', npmRegistry], { cwd: webProject, env: npmEnv() });
   }
 }
@@ -375,7 +389,7 @@ function dockerBuildWeb() {
 }
 
 async function installAllDeps() {
-  installWebDeps();
+  await installWebDeps();
   await restoreServer();
   await restoreAndroid();
   console.log('依赖安装完成：Web npm、.NET SDK、NuGet 包、JDK、Android SDK、Android workload 均已安装/还原。可执行: node build.mjs build 或 node build.mjs build-apk');
@@ -443,7 +457,7 @@ function jdkUrls(targetOs, arch) {
   const official = targetOs === 'windows'
     ? 'https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse'
     : 'https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse';
-  return uniqueUrls([jdkUrl, mirror, official]);
+  return uniqueUrls(useCnMirror ? [jdkUrl, mirror, official] : [jdkUrl, official]);
 }
 
 function androidCmdlineToolsUrls() {
@@ -452,15 +466,87 @@ function androidCmdlineToolsUrls() {
     : isMac
       ? 'commandlinetools-mac-11076708_latest.zip'
       : 'commandlinetools-linux-11076708_latest.zip';
-  return uniqueUrls([
-    androidCmdlineToolsUrl,
-    `https://mirrors.tuna.tsinghua.edu.cn/android/repository/${file}`,
-    `https://dl.google.com/android/repository/${file}`,
-  ]);
+  const mirror = `https://mirrors.tuna.tsinghua.edu.cn/android/repository/${file}`;
+  const official = `https://dl.google.com/android/repository/${file}`;
+  return uniqueUrls(useCnMirror ? [androidCmdlineToolsUrl, mirror, official] : [androidCmdlineToolsUrl, official]);
 }
 
 function uniqueUrls(urls) {
   return urls.filter((url, index) => url && urls.indexOf(url) === index);
+}
+
+// 快速探测一个 URL 是否可达（短超时 HEAD 请求，任何非 5xx 响应都视为可达）。
+function probeUrl(rawUrl, timeoutMs = probeTimeoutMs) {
+  return new Promise(resolve => {
+    let u;
+    try {
+      u = new URL(rawUrl);
+    } catch {
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    try {
+      const req = https.request(u, {
+        method: 'HEAD',
+        timeout: timeoutMs,
+        headers: { 'User-Agent': 'Wget/1.21.4', Accept: '*/*' },
+      }, res => {
+        res.resume();
+        finish(res.statusCode < 500);
+      });
+      req.on('timeout', () => { req.destroy(); finish(false); });
+      req.on('error', () => finish(false));
+      req.end();
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+// 并发探测一组候选源：不可达的直接剔除（快速失败，避免把死源交给 dotnet/npm 导致长时间挂起），
+// 只有当全部候选都探测失败时，才保留原始完整列表作为最后兜底（避免探测方式本身不可靠导致误判造成彻底无法构建）。
+async function reorderReachableFirst(label, urls) {
+  const list = uniqueUrls(urls);
+  if (list.length <= 1) return list;
+  const results = await Promise.all(list.map(async u => ({ u, ok: await probeUrl(u) })));
+  const reachable = results.filter(r => r.ok).map(r => r.u);
+  const unreachable = results.filter(r => !r.ok).map(r => r.u);
+  for (const u of unreachable) console.warn(`[探测] ${label} 源不可达(超时 ${probeTimeoutMs}ms)，已快速失败并退避: ${u}`);
+  if (!reachable.length) {
+    console.warn(`[探测] ${label} 所有源均探测失败，保持原顺序继续尝试: ${list.join(' -> ')}`);
+    return list;
+  }
+  return reachable;
+}
+
+let nugetSourcesProbed = false;
+let npmRegistryProbed = false;
+
+// 在真正执行 dotnet restore 之前探测 NuGet 源；未显式指定 --nuget-source 时，会自动补充官方源/国内镜像作为退避候选。
+async function ensureNugetSourcesProbed() {
+  if (nugetSourcesProbed || skipSourceProbe) return;
+  nugetSourcesProbed = true;
+  section('探测 NuGet 源可用性');
+  const pool = userConfiguredNugetSource ? nugetSources : uniqueUrls([...nugetSources, officialNugetSource, cnNugetSource]);
+  nugetSources = await reorderReachableFirst('NuGet', pool);
+  console.log(`NuGet 源使用顺序: ${nugetSources.join(' -> ')}`);
+}
+
+// 在真正执行 npm install 之前探测 registry；未显式指定 --npm-registry 时，会自动补充官方源/国内镜像作为退避候选。
+async function ensureNpmRegistryProbed() {
+  if (npmRegistryProbed || skipSourceProbe) return;
+  npmRegistryProbed = true;
+  section('探测 npm registry 可用性');
+  const pool = userConfiguredNpmRegistry ? [npmRegistry] : uniqueUrls([npmRegistry, officialNpmRegistry, cnNpmRegistry]);
+  const ordered = await reorderReachableFirst('npm', pool);
+  npmRegistry = ordered[0] || npmRegistry;
+  console.log(`npm registry 使用: ${npmRegistry}`);
 }
 
 function jdkLibraryPaths(javaHome = getJavaHome()) {
@@ -484,12 +570,12 @@ async function installJdk() {
   section(`安装 JDK 17 到 ${localJdkDir}`);
   if (isWin) {
     const zip = path.join(toolsDir, 'jdk17-windows-x64.zip');
-    await downloadFirst(jdkUrls('windows', 'x64'), zip);
+    await downloadFirst(await reorderReachableFirst('JDK', jdkUrls('windows', 'x64')), zip);
     await extractZip(zip, path.join(toolsDir, 'jdk-extract'));
     moveFirstChild(path.join(toolsDir, 'jdk-extract'), localJdkDir);
   } else if (isLinux && os.arch() === 'x64') {
     const tarball = path.join(toolsDir, 'jdk17-linux-x64.tar.gz');
-    await downloadFirst(jdkUrls('linux', 'x64'), tarball);
+    await downloadFirst(await reorderReachableFirst('JDK', jdkUrls('linux', 'x64')), tarball);
     rmrf(localJdkDir);
     mkdirp(localJdkDir);
     run('tar', ['-xzf', tarball, '-C', localJdkDir, '--strip-components=1']);
@@ -520,7 +606,7 @@ async function installAndroidSdk() {
   mkdirp(cmdlineToolsDir);
   if (!exists(sdkManager)) {
     section(`安装 Android cmdline-tools 到 ${androidSdkRoot}`);
-    const url = androidCmdlineToolsUrls();
+    const url = await reorderReachableFirst('Android cmdline-tools', androidCmdlineToolsUrls());
     const zip = path.join(toolsDir, `commandlinetools-${process.platform}.zip`);
     const tmp = path.join(toolsDir, 'cmdline-tools-tmp');
     await downloadFirst(url, zip);
@@ -553,6 +639,7 @@ async function installAndroidSdk() {
 
 async function installWorkload() {
   await installDotnet();
+  await ensureNugetSourcesProbed();
   section('安装/还原 .NET Android workload');
   try {
     dotnet(['workload', 'restore', androidProject, ...nugetSourceArgs()]);
@@ -565,6 +652,7 @@ async function installWorkload() {
 
 async function restoreServer() {
   await installDotnet();
+  await ensureNugetSourcesProbed();
   dotnet(['restore', serverProject, ...nugetSourceArgs()]);
 }
 
@@ -575,13 +663,13 @@ async function restoreAndroid() {
 }
 
 async function buildServer() {
-  buildWeb();
+  await buildWeb();
   await restoreServer();
   dotnet(['build', serverProject, '-c', config, '--no-restore']);
 }
 
 async function runServer() {
-  buildWeb();
+  await buildWeb();
   await restoreServer();
   console.log(`启动 http://127.0.0.1:${port}`);
   const sdk = getDotnetSdkPath();
@@ -589,7 +677,7 @@ async function runServer() {
 }
 
 async function publishServer() {
-  buildWeb();
+  await buildWeb();
   await restoreServer();
   rmrf(serverOut);
   dotnet(['publish', serverProject, '-c', config, '-r', runtime, '--self-contained', 'false', '--no-restore', '-o', serverOut]);
@@ -630,7 +718,7 @@ function dockerPublishServer() {
 }
 
 async function buildApk() {
-  buildWeb();
+  await buildWeb();
   await restoreAndroid();
   rmrf(apkOut);
   mkdirp(apkOut);
@@ -806,7 +894,7 @@ async function download(url, outFile) {
       Connection: 'close',
     };
     const request = (u, redirects = 0) => {
-      https.get(u, { headers }, res => {
+      const req = https.get(u, { headers, timeout: downloadTimeoutMs }, res => {
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
           res.resume();
           if (redirects > 8) reject(new Error('重定向过多'));
@@ -820,7 +908,9 @@ async function download(url, outFile) {
         }
         res.pipe(file);
         file.on('finish', () => file.close(resolve));
-      }).on('error', reject);
+      });
+      req.on('timeout', () => req.destroy(new Error(`下载连接超时(${downloadTimeoutMs}ms): ${u}`)));
+      req.on('error', reject);
     };
     request(url);
   });

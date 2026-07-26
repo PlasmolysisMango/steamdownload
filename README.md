@@ -35,10 +35,13 @@ node build.mjs clean
 ```bash
 node build.mjs run --port=9000
 node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0
+node build.mjs build-apk --cn-mirror=true   # 国内网络环境下优先用国内镜像(NuGet/npm/JDK/Android cmdline-tools/Docker 镜像)
 node build.mjs build-apk --nuget-source=https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json
 ```
 
-`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`。NuGet 源默认使用国内源优先（华为云 NuGet，官方源兜底），npm registry 默认使用 `https://registry.npmmirror.com`；如果你的网络需要自定义镜像，可以追加 `--nuget-source=<URL[,URL...]>` / `--npm-registry=<URL>` 或设置环境变量 `NUGET_SOURCE` / `NPM_REGISTRY`。
+`build.mjs` 无 npm 依赖，会优先复用系统已有的 `dotnet` / `java` / `sdkmanager`；缺失时会把 `.NET SDK`、Temurin JDK 17、Android cmdline-tools 安装到项目本地 `.tools/`。所有下载/包源默认均使用官方地址（NuGet=`https://api.nuget.org/v3/index.json`，npm=`https://registry.npmjs.org`，JDK/Android cmdline-tools 从 Adoptium/Google 官方地址下载，Docker 镜像默认使用 Docker Hub / mcr.microsoft.com）。如果你在国内网络访问官方源较慢，可追加 `--cn-mirror=true`（或设置环境变量 `CN_MIRROR=1`）让上述来源统一优先切换为国内镜像；也可以只针对某一项显式指定 `--nuget-source=<URL[,URL...]>` / `--npm-registry=<URL>` / `--jdk-url=<URL>` / `--android-cmdline-tools-url=<URL>` / `--web-docker-image=<image>` / `--dotnet-docker-image=<image>`（或对应环境变量），单独覆盖时不受 `--cn-mirror` 影响。
+
+在真正开始 `build` / `install-deps` / `restore` / `build-apk` 等会联网的任务前，脚本会先用短超时 HEAD 请求探测本次要用的 NuGet 源、npm registry（涉及下载 JDK/Android cmdline-tools 时同样会探测那组候选地址）；探测不通的源会被快速剔除，未显式指定 `--nuget-source` / `--npm-registry` 时还会自动补充官方源/国内镜像作为退避候选，避免把死源交给 `dotnet restore` / `npm install` 导致长时间卡住（只有当全部候选都探测失败时，才会保留原始列表继续尝试，防止探测本身误判导致完全无法构建）。可用 `--skip-probe=true`（或 `SKIP_SOURCE_PROBE=1`）关闭探测，`--probe-timeout=<ms>`（或 `SOURCE_PROBE_TIMEOUT`）调整探测超时（默认 4000ms），`--download-timeout=<ms>`（或 `DOWNLOAD_TIMEOUT`）调整单次下载的无活动超时（默认 20000ms）。
 
 ## 桌面运行（已在 Linux 验证）
 
@@ -76,23 +79,28 @@ ANDROID_KEYSTORE=/path/steamdl-release.keystore ANDROID_KEY_ALIAS=steamdl ANDROI
 # 网络或 NuGet 配置异常时，显式指定 NuGet 源列表（逗号分隔，前面的源优先）
 node build.mjs build-apk --nuget-source=https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json
 
+# 国内网络环境下一键切换 NuGet/npm/JDK/Android cmdline-tools/Docker 镜像为国内源
+node build.mjs build-apk --cn-mirror=true
+
 # 清理 bin/obj/artifacts
 node build.mjs clean
 ```
 
-`build-apk` 默认配置：
+`build-apk` 默认配置（未加 `--cn-mirror` 时）：
 
 ```text
 --config=Release
 --android-api=35
 --android-build-tools=35.0.0
---nuget-source=https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json
---npm-registry=https://registry.npmmirror.com
+--nuget-source=https://api.nuget.org/v3/index.json
+--npm-registry=https://registry.npmjs.org
 ANDROID_SDK_ROOT=.tools/android-sdk（未设置系统 ANDROID_SDK_ROOT/ANDROID_HOME 时）
 APK 输出目录=artifacts/apk
 Release keystore 默认路径=.tools/keystore/steamdl-release.keystore
 Release key alias 默认值=steamdl
 ```
+
+追加 `--cn-mirror=true`（或 `CN_MIRROR=1`）后，NuGet 默认改为 `https://repo.huaweicloud.com/repository/nuget/v3/index.json,https://api.nuget.org/v3/index.json`，npm registry 默认改为 `https://registry.npmmirror.com`，JDK/Android cmdline-tools 下载与 Docker 镜像也一并切换为国内源，官方源仍作为兜底。
 
 实际执行流程：
 
@@ -112,8 +120,8 @@ Release key alias 默认值=steamdl
 如果不用脚本，等价核心命令大致是：
 
 ```bash
-dotnet workload restore src/SteamDl.Android --source https://repo.huaweicloud.com/repository/nuget/v3/index.json --source https://api.nuget.org/v3/index.json
-dotnet restore src/SteamDl.Android --source https://repo.huaweicloud.com/repository/nuget/v3/index.json --source https://api.nuget.org/v3/index.json
+dotnet workload restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
+dotnet restore src/SteamDl.Android --source https://api.nuget.org/v3/index.json
 dotnet publish src/SteamDl.Android -c Release -p:AndroidPackageFormat=apk -p:AndroidSdkDirectory=<Android SDK路径> -p:JavaSdkDirectory=<JDK路径> -p:AndroidKeyStore=true -p:AndroidSigningKeyStore=<keystore路径> -p:AndroidSigningKeyAlias=steamdl -p:AndroidSigningStorePass=<密码> -p:AndroidSigningKeyPass=<密码>
 ```
 
