@@ -45,6 +45,7 @@ jobs:
     outputs:
       config: ${{ steps.resolve-config.outputs.config }}
       artifact-name: ${{ steps.resolve-config.outputs.artifact-name }}
+      apk-name: ${{ steps.resolve-config.outputs.apk-name }}
 
     steps:
       - name: Resolve config
@@ -52,6 +53,7 @@ jobs:
         run: |
           echo "config=${{ env.CONFIG }}" >> "$GITHUB_OUTPUT"
           echo "artifact-name=steamdl-apk-${{ env.CONFIG }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "apk-name=SteamDl-${{ env.CONFIG }}.apk" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -130,13 +132,35 @@ jobs:
             --nuget-source=https://api.nuget.org/v3/index.json \
             --npm-registry=https://registry.npmjs.org
 
+      - name: Prepare direct APK file
+        run: |
+          mkdir -p artifacts/direct
+          python3 - <<'PY'
+          import glob
+          import os
+          import shutil
+          import sys
+
+          apk_name = '${{ steps.resolve-config.outputs.apk-name }}'
+          apks = sorted(glob.glob('artifacts/apk/*.apk'))
+          signed = [p for p in apks if p.lower().endswith('-signed.apk')]
+          selected = signed[0] if signed else (apks[0] if apks else None)
+          if not selected:
+              print('::error::未找到 APK 产物')
+              sys.exit(1)
+          target = os.path.join('artifacts', 'direct', apk_name)
+          shutil.copyfile(selected, target)
+          print(f'Direct APK: {target}')
+          PY
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.resolve-config.outputs.artifact-name }}
-          path: artifacts/apk/*.apk
+          path: artifacts/direct/${{ steps.resolve-config.outputs.apk-name }}
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
 
   release:
     needs: build-apk
@@ -167,10 +191,15 @@ jobs:
           CONFIG: ${{ needs.build-apk.outputs.config }}
           SHA: ${{ github.sha }}
         run: |
+          mapfile -t apks < <(find dist -type f -name '*.apk' | sort)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::未找到可发布的 APK 文件"
+            exit 1
+          fi
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.apk --clobber --repo "$REPO"
+            gh release upload "$TAG" "${apks[@]}" --clobber --repo "$REPO"
           else
-            gh release create "$TAG" dist/*.apk \
+            gh release create "$TAG" "${apks[@]}" \
               --title "$TAG" \
               --notes "自动构建（CONFIG=$CONFIG, commit=$SHA）" \
               --repo "$REPO"
