@@ -120,6 +120,33 @@ dotnet publish src/SteamDl.Android -c Release -p:AndroidPackageFormat=apk -p:And
 侧载安装后首次启动会跳转"所有文件访问"授权页（写 /sdcard/Download 需要），
 授权后返回应用即可使用。下载目录默认优先使用已保存的配置；未配置时使用 `/sdcard/Download/steamdl`。
 
+## GitHub Actions 自动构建 APK
+
+工作流文件：[.github/workflows/build-apk.yml](file:///root/workspace/project/steamdownload/.github/workflows/build-apk.yml)。触发方式：
+
+```text
+push 到 master（改动涉及 src/、external/、build.mjs 时）
+push tag（形如 v1.0.0）
+pull_request（只构建 Debug，不使用签名密钥）
+workflow_dispatch（手动触发，可选择 Release/Debug）
+```
+
+CI 环境使用 `actions/setup-node`、`actions/setup-java`（Temurin 17）、`android-actions/setup-android`、`actions/setup-dotnet`（9.0.x）预装工具链，再执行 `node build.mjs build-apk`，并显式指定官方源（`--nuget-source=https://api.nuget.org/v3/index.json --npm-registry=https://registry.npmjs.org`），避免国内镜像在 CI 环境反而变慢。NuGet 包缓存通过 `actions/cache` 缓存 `.tools/nuget`。
+
+Release 签名（可选，未配置则脚本会在 CI 里生成一个临时本地 keystore，仅用于验证构建，不适合长期分发）：
+
+```text
+1. 本地生成正式 keystore: keytool -genkeypair -v -keystore steamdl-release.keystore -alias steamdl -keyalg RSA -keysize 2048 -validity 10000
+2. 转 base64: base64 -w0 steamdl-release.keystore
+3. 在仓库 Settings -> Secrets and variables -> Actions 中添加:
+   ANDROID_KEYSTORE_BASE64  # 上一步 base64 结果
+   ANDROID_KEY_ALIAS
+   ANDROID_STORE_PASS
+   ANDROID_KEY_PASS
+```
+
+配置好这些 secrets 后，`push master` / `push tag` / 手动触发且选择 Release 时会使用该 keystore 签名；未配置时 Release 构建仍会成功，但每次生成的临时 keystore 不同，产物无法覆盖升级，仅用于验证构建流程。构建完成后在该次 workflow run 的 Artifacts 中下载 `steamdl-apk-<config>-<sha>`，里面是生成的 `.apk` 文件。
+
 ## 使用说明
 
 - 粘贴商店链接 / steam:// 链接 / AppID → 解析。
