@@ -19,6 +19,7 @@ namespace SteamDl.Core
         public string Os { get; set; } = "windows";   // windows | linux | any
         public string DepotId { get; set; }
         public string OutputDir { get; set; }
+        public string InstallDirName { get; set; }
     }
 
     public sealed class LoginState
@@ -372,10 +373,12 @@ namespace SteamDl.Core
                 foreach (var appId in appIds)
                 {
                     var name = $"App {appId}";
+                    var installDir = string.Empty;
                     if (session.AppInfo.TryGetValue(appId, out var appInfo) && appInfo != null)
                     {
                         var appName = appInfo.KeyValues["common"]["name"].AsString();
                         if (!string.IsNullOrWhiteSpace(appName)) name = appName;
+                        installDir = appInfo.KeyValues["config"]["installdir"].AsString() ?? string.Empty;
                     }
 
                     items.Add(new JsonObject
@@ -383,6 +386,8 @@ namespace SteamDl.Core
                         ["app_id"] = appId.ToString(),
                         ["id"] = appId.ToString(),
                         ["name"] = name,
+                        ["installdir"] = installDir,
+                        ["install_dir"] = installDir,
                         ["header_image"] = $"https://cdn.cloudflare.steamstatic.com/steam/apps/{appId}/header.jpg",
                     });
                 }
@@ -757,7 +762,18 @@ namespace SteamDl.Core
             var baseDir = string.IsNullOrWhiteSpace(request.OutputDir)
                 ? JobStore.Instance.GetSettings().DefaultDownloadDir
                 : request.OutputDir;
-            return Path.Combine(baseDir, (request.Kind == "workshop" ? "workshop_" : "app_") + request.Id);
+            var dirName = request.Kind == "workshop"
+                ? "workshop_" + request.Id
+                : SafeDirectoryName(request.InstallDirName, "app_" + request.Id);
+            return Path.Combine(baseDir, dirName);
+        }
+
+        static string SafeDirectoryName(string value, string fallback)
+        {
+            var name = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+            foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            name = name.Replace('/', '_').Replace('\\', '_').Trim();
+            return string.IsNullOrWhiteSpace(name) ? fallback : name;
         }
 
         static DownloadRequest ToRequest(JobRecord job)
@@ -771,6 +787,7 @@ namespace SteamDl.Core
                 Os = job.PlatformOs,
                 DepotId = job.DepotId,
                 OutputDir = Path.GetDirectoryName(job.OutputDir),
+                InstallDirName = Path.GetFileName(job.OutputDir),
             };
         }
 

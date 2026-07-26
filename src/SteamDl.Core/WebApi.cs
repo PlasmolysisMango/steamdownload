@@ -424,6 +424,9 @@ namespace SteamDl.Core
             Os = body?["os"]?.GetValue<string>() ?? "windows",
             DepotId = body?["depot"]?.ToString() ?? body?["depot_id"]?.ToString(),
             OutputDir = body?["output_dir"]?.GetValue<string>(),
+            InstallDirName = body?["install_dir"]?.GetValue<string>()
+                ?? body?["installdir"]?.GetValue<string>()
+                ?? body?["name"]?.GetValue<string>(),
         };
 
         static AppSettings ParseSettings(JsonObject body) => new()

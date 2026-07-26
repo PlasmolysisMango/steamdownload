@@ -38,6 +38,8 @@ namespace SteamDl.Core
                 ["header_image"] = data?["header_image"]?.GetValue<string>() ?? string.Empty,
                 ["is_free"] = data?["is_free"]?.GetValue<bool>() ?? false,
                 ["type"] = data?["type"]?.GetValue<string>() ?? string.Empty,
+                ["installdir"] = data?["config"]?["installdir"]?.GetValue<string>() ?? string.Empty,
+                ["install_dir"] = data?["config"]?["installdir"]?.GetValue<string>() ?? string.Empty,
             };
             Cache[appId] = info;
             return info;

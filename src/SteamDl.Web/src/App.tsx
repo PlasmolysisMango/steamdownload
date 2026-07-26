@@ -26,10 +26,11 @@ type Settings = {
   auto_resume: boolean;
 };
 
-type LibraryGame = { app_id: string; name: string; header_image?: string };
+type Config = { can_pick_directory: boolean; can_open_output: boolean; download_dir: string };
+type LibraryGame = { app_id: string; name: string; header_image?: string; install_dir?: string; installdir?: string };
 type AccountDetail = { username: string; logged_in: boolean; remember_password: boolean; has_saved_password: boolean; last_used_at?: string };
 type LoginState = { username?: string; state: string; prompt?: string; prompt_secret?: boolean; error?: string; log?: string; remember_password?: boolean };
-type DownloadSeed = { kind: string; id: string; name?: string } | null;
+type DownloadSeed = { kind: string; id: string; name?: string; install_dir?: string; installdir?: string } | null;
 type Tab = 'accounts' | 'download' | 'library' | 'jobs' | 'settings';
 
 async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
@@ -60,6 +61,7 @@ export function App() {
   const [selectedAccount, setSelectedAccountState] = useState(() => localStorage.getItem('steamdl.account') || '');
   const [downloadSeed, setDownloadSeed] = useState<DownloadSeed>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [config, setConfig] = useState<Config | null>(null);
   const [toast, setToast] = useState('');
   const [serviceOnline, setServiceOnline] = useState(true);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
@@ -72,10 +74,11 @@ export function App() {
   }
 
   async function refresh() {
-    const [jobsRes, accountsRes, settingsRes] = await Promise.all([
+    const [jobsRes, accountsRes, settingsRes, configRes] = await Promise.all([
       api<{ jobs: Job[] }>('/api/jobs'),
       api<{ accounts: string[]; account_details?: AccountDetail[]; login?: LoginState }>('/api/accounts').catch(() => ({ accounts: [], account_details: [], login: { state: 'idle' } })),
       api<Settings>('/api/settings'),
+      api<Config>('/api/config').catch(() => null),
     ]);
     setJobs(jobsRes.jobs);
     setAccounts(accountsRes.accounts);
@@ -85,6 +88,7 @@ export function App() {
       setSelectedAccount(accountsRes.login.username);
     }
     setSettings(settingsRes);
+    if (configRes) setConfig(configRes);
     setServiceOnline(true);
     if (activeJob) {
       const detail = await api<Job>(`/api/jobs/${activeJob.job_id}`).catch(() => null);
@@ -171,25 +175,12 @@ export function App() {
     </aside>
 
     <main className="main" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-      <header className="topbar">
-        <div>
-          <h2>{title(tab)}</h2>
-          <p>{locked ? '登录后可解析链接、浏览游戏库并创建下载任务' : '支持任务持久化、后台恢复与 APK/桌面共用界面'}</p>
-          <small className="swipeHint">左右滑动可切换页面</small>
-        </div>
-        <div className="statusCluster">
-          <button className={`iconButton iconStatus ${serviceOnline ? 'online' : 'offline'}`} onClick={() => setToast(serviceOnline ? '服务已连接' : '服务连接中断，正在等待恢复')} title={serviceOnline ? '服务已连接' : '连接中断'} aria-label={serviceOnline ? '服务已连接' : '连接中断'}>{serviceOnline ? '●' : '!'}</button>
-          <button className={`iconButton iconStatus ${running ? 'busy' : 'idle'}`} onClick={() => setToast(running ? '当前有下载任务运行或等待输入' : '当前没有运行中的任务')} title={running ? '有任务运行' : '空闲'} aria-label={running ? '有任务运行' : '空闲'}>{running ? '↻' : '✓'}</button>
-          <button className="iconButton" onClick={manualRefresh} title="刷新" aria-label="刷新">⟳</button>
-        </div>
-      </header>
-
       {toast && <div className="toast" onClick={() => setToast('')}>{toast}</div>}
       {tab === 'accounts' && <AccountsPage accounts={accounts} accountDetails={accountDetails} loginState={loginState} selectedAccount={selectedAccount} setSelectedAccount={setSelectedAccount} refresh={refresh} setToast={setToast} />}
-      {tab === 'download' && (locked ? <LoginGate setTab={openTab} /> : <DownloadPage settings={settings} selectedAccount={selectedAccount} seed={downloadSeed} clearSeed={() => setDownloadSeed(null)} setToast={setToast} refresh={refresh} />)}
+      {tab === 'download' && (locked ? <LoginGate setTab={openTab} /> : <DownloadPage settings={settings} config={config} selectedAccount={selectedAccount} seed={downloadSeed} clearSeed={() => setDownloadSeed(null)} setToast={setToast} refresh={refresh} setActiveJob={setActiveJob} setTab={openTab} />)}
       {tab === 'library' && (locked ? <LoginGate setTab={openTab} /> : <LibraryPage selectedAccount={selectedAccount} setToast={setToast} openDownload={openDownload} />)}
       {tab === 'jobs' && <JobsPage jobs={jobs} activeJob={activeJob} setActiveJob={setActiveJob} refresh={refresh} setToast={setToast} />}
-      {tab === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} setToast={setToast} />}
+      {tab === 'settings' && <SettingsPage settings={settings} config={config} setSettings={setSettings} setToast={setToast} loginState={loginState} activeJob={activeJob} jobs={jobs} setActiveJob={setActiveJob} refresh={refresh} />}
     </main>
   </div>;
 }
@@ -206,7 +197,7 @@ function LoginGate({ setTab }: { setTab: (tab: Tab) => void }) {
   </div>;
 }
 
-function DownloadPage({ settings, selectedAccount, seed, clearSeed, setToast, refresh }: { settings: Settings | null; selectedAccount: string; seed: DownloadSeed; clearSeed: () => void; setToast: (s: string) => void; refresh: () => Promise<void> }) {
+function DownloadPage({ settings, config, selectedAccount, seed, clearSeed, setToast, refresh, setActiveJob, setTab }: { settings: Settings | null; config: Config | null; selectedAccount: string; seed: DownloadSeed; clearSeed: () => void; setToast: (s: string) => void; refresh: () => Promise<void>; setActiveJob: (job: Job | null) => void; setTab: (tab: Tab) => void }) {
   const [url, setUrl] = useState('');
   const [parsed, setParsed] = useState<{ kind: string; id: string } | null>(seed ? { kind: seed.kind, id: seed.id } : null);
   const [appInfo, setAppInfo] = useState<any>(null);
@@ -224,7 +215,8 @@ function DownloadPage({ settings, selectedAccount, seed, clearSeed, setToast, re
   useEffect(() => {
     if (!seed) return;
     setParsed({ kind: seed.kind, id: seed.id });
-    setAppInfo(seed.name ? { name: seed.name } : null);
+    setAppInfo(seed.name ? { name: seed.name, installdir: seed.installdir || seed.install_dir, install_dir: seed.install_dir || seed.installdir } : null);
+    if (seed.kind === 'app') api(`/api/appinfo/${seed.id}`).then(setAppInfo).catch(() => {});
     clearSeed();
   }, [seed?.id]);
 
@@ -237,12 +229,33 @@ function DownloadPage({ settings, selectedAccount, seed, clearSeed, setToast, re
     } catch (e: any) { setToast(e.message); }
   }
 
+  async function pickDirectory() {
+    if (!config?.can_pick_directory) {
+      const picked = window.prompt('当前浏览器无法读取本机目录路径，请手动输入保存目录：', outputDir || settings?.default_download_dir || '/storage/emulated/0/Download/steamdl');
+      if (picked?.trim()) {
+        setOutputDir(picked.trim());
+        setToast('已填写保存目录');
+      }
+      return;
+    }
+    try {
+      const res = await api<{ path?: string; download_dir?: string }>('/api/pick-directory', {});
+      const picked = res.path || res.download_dir || '';
+      if (picked) {
+        setOutputDir(picked);
+        setToast('已选择保存目录');
+      }
+    } catch (e: any) { setToast(e.message); }
+  }
+
   async function start() {
     if (!parsed) return;
     try {
-      const res = await api<{ job: Job }>('/api/jobs', { kind: parsed.kind, id: parsed.id, username: selectedAccount, anonymous: false, os, depot, output_dir: outputDir });
+      const res = await api<{ job: Job }>('/api/jobs', { kind: parsed.kind, id: parsed.id, username: selectedAccount, anonymous: false, os, depot, output_dir: outputDir, install_dir: appInfo?.installdir || appInfo?.install_dir, name: appInfo?.name });
+      setActiveJob(res.job);
       setToast(`任务已创建: ${res.job.job_id.slice(0, 8)}`);
       await refresh();
+      setTab('jobs');
     } catch (e: any) { setToast(e.message); }
   }
 
@@ -268,15 +281,16 @@ function DownloadPage({ settings, selectedAccount, seed, clearSeed, setToast, re
         </select>
       </label>
       <label>Depot ID（可选）<input value={depot} onChange={e => setDepot(e.target.value)} placeholder="例如 731" /></label>
-      <label>保存目录<input value={outputDir} onChange={e => setOutputDir(e.target.value)} /></label>
+      <label>保存目录
+        <div className="row inlineRow"><input value={outputDir} onChange={e => setOutputDir(e.target.value)} placeholder={settings?.default_download_dir || '/storage/emulated/0/Download/steamdl'} /><button type="button" onClick={pickDirectory}>{config?.can_pick_directory ? '选择' : '填写'}</button></div>
+      </label>
+      <p className="muted">实际下载会自动在该目录下创建游戏目录（优先使用 Steam 游戏安装目录名）。</p>
       <button className="primary block" disabled={!parsed} onClick={start}>使用 {selectedAccount} 开始下载</button>
     </div>
   </section>;
 }
 
 function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: Job[]; activeJob: Job | null; setActiveJob: (job: Job | null) => void; refresh: () => Promise<void>; setToast: (s: string) => void }) {
-  const [logExpanded, setLogExpanded] = useState(false);
-  useEffect(() => setLogExpanded(false), [activeJob?.job_id]);
   async function load(job: Job) { setActiveJob(await api<Job>(`/api/jobs/${job.job_id}`)); }
   async function action(job: Job, name: 'cancel' | 'retry') {
     if (name === 'cancel' && !window.confirm('确定要取消当前下载任务吗？')) return;
@@ -302,8 +316,7 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
         <div className="bar"><i style={{ width: `${activeJob.percent || 0}%` }} /></div>
         <p className="muted">{activeJob.progress_text || activeJob.error || activeJob.output_dir}</p>
         {activeJob.state === 'waiting_input' && <div className="prompt"><p>{activeJob.prompt}</p><div className="row"><input id="jobInput" type={activeJob.prompt_secret ? 'password' : 'text'} /><button onClick={sendInput}>提交</button></div></div>}
-        <div className="logHead"><strong>任务日志</strong><button className="ghost" onClick={() => setLogExpanded(x => !x)}>{logExpanded ? '收起' : '展开'}</button></div>
-        <pre className={logExpanded ? 'expanded' : 'collapsed'}>{activeJob.log || '暂无日志'}</pre>
+        <p className="muted">详细日志请到“设置 - 日志”查看。</p>
         <div className="actions"><button className="danger" onClick={() => action(activeJob, 'cancel')}>取消</button><button onClick={() => action(activeJob, 'retry')}>重试/继续</button></div>
       </>}
     </div>
@@ -314,24 +327,34 @@ function LibraryPage({ selectedAccount, setToast, openDownload }: { selectedAcco
   const [games, setGames] = useState<LibraryGame[]>([]);
   const [message, setMessage] = useState('');
   const [manualId, setManualId] = useState('');
+  const [query, setQuery] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const visibleGames = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return games;
+    return games.filter(g => g.app_id.includes(q) || g.name.toLowerCase().includes(q));
+  }, [games, query]);
   async function sync() {
+    setSyncing(true);
     try {
       const res = await api<any>(`/api/library?username=${encodeURIComponent(selectedAccount)}`);
-      setGames((res.items || []).map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image })));
+      setGames((res.items || []).map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir })));
       setMessage(res.message || '库同步完成');
     } catch (e: any) { setToast(e.message); }
+    finally { setSyncing(false); }
   }
   return <section className="grid two">
     <div className="card span2">
       <h3>游戏库</h3>
-      <p className="muted">当前账号：{selectedAccount}。可以从库中选择游戏下载，也可以输入 AppID 快速跳转到下载页。</p>
-      <div className="row"><button onClick={sync}>同步库</button><input value={manualId} onChange={e => setManualId(e.target.value)} placeholder="输入 AppID，例如 730" /><button disabled={!manualId.trim()} onClick={() => openDownload({ kind: 'app', id: manualId.trim() })}>下载此 AppID</button></div>
+      <p className="muted">当前账号：{selectedAccount}。同步后可直接选择游戏下载，也可以输入 AppID 快速跳转。</p>
+      <div className="row"><button disabled={syncing} onClick={sync}>{syncing ? '同步中…' : '同步库'}</button><input value={manualId} onChange={e => setManualId(e.target.value)} placeholder="输入 AppID，例如 730" /><button disabled={!manualId.trim()} onClick={() => openDownload({ kind: 'app', id: manualId.trim() })}>下载此 AppID</button></div>
+      {games.length > 0 && <input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" />}
       {message && <p className="muted">{message}</p>}
     </div>
-    {games.length === 0 ? <div className="card span2"><p className="muted">游戏库详情接口仍在预留阶段。当前可先输入 AppID，或到下载页解析 Steam 商店链接。</p></div> : games.map(game => <div className="card game" key={game.app_id}>
+    {games.length === 0 ? <div className="card span2"><p className="muted">尚未同步游戏库。点击“同步库”读取当前账号拥有的游戏，或直接输入 AppID 下载。</p></div> : visibleGames.map(game => <div className="card game" key={game.app_id}>
       {game.header_image && <img src={game.header_image} />}
       <h3>{game.name}</h3><p className="muted">AppID {game.app_id}</p>
-      <button className="primary block" onClick={() => openDownload({ kind: 'app', id: game.app_id, name: game.name })}>选择并下载</button>
+      <button className="primary block" onClick={() => openDownload({ kind: 'app', id: game.app_id, name: game.name, install_dir: game.install_dir || game.installdir })}>选择并下载</button>
     </div>)}
   </section>;
 }
@@ -392,7 +415,7 @@ function AccountsPage({ accounts, accountDetails, loginState, selectedAccount, s
       {(loginState.state === 'running' || loginState.state === 'waiting_input') && <p className="pill running">登录中：{loginState.username || draft}</p>}
       {loginState.state === 'waiting_input' && <div className="prompt"><p>{loginState.prompt || '请输入 Steam Guard / 2FA 验证码'}</p><div className="row"><input value={answer} type={loginState.prompt_secret ? 'password' : 'text'} onChange={e => setAnswer(e.target.value)} placeholder="Steam Guard / 2FA" /><button onClick={submitGuard}>提交验证</button></div></div>}
       {loginState.state === 'error' && <p className="muted">登录失败：{loginState.error}</p>}
-      {loginState.log && <pre>{loginState.log}</pre>}
+      {loginState.log && <p className="muted">登录日志已移到“设置 - 日志”。</p>}
     </div>
     <div className="card">
       <h3>已保存账号</h3>
@@ -415,12 +438,57 @@ function AccountsPage({ accounts, accountDetails, loginState, selectedAccount, s
   </section>;
 }
 
-function SettingsPage({ settings, setSettings, setToast }: { settings: Settings | null; setSettings: (s: Settings) => void; setToast: (s: string) => void }) {
+function SettingsPage({ settings, config, setSettings, setToast, loginState, activeJob, jobs, setActiveJob, refresh }: { settings: Settings | null; config: Config | null; setSettings: (s: Settings) => void; setToast: (s: string) => void; loginState: LoginState; activeJob: Job | null; jobs: Job[]; setActiveJob: (job: Job | null) => void; refresh: () => Promise<void> }) {
   const [draft, setDraft] = useState<Settings | null>(settings);
-  useEffect(() => setDraft(settings), [settings]);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { if (!dirty) setDraft(settings); }, [settings?.default_download_dir, settings?.default_platform_os, settings?.max_downloads, settings?.auto_resume, dirty]);
   if (!draft) return <div className="card">加载设置中…</div>;
-  async function save() { try { const saved = await api<Settings>('/api/settings', draft); setSettings(saved); setToast('设置已保存'); } catch (e: any) { setToast(e.message); } }
-  return <div className="card form"><h3>设置</h3><label>默认下载目录<input value={draft.default_download_dir} onChange={e => setDraft({ ...draft, default_download_dir: e.target.value })} /></label><label>默认平台<select value={draft.default_platform_os} onChange={e => setDraft({ ...draft, default_platform_os: e.target.value })}><option value="windows">Windows</option><option value="linux">Linux</option><option value="any">全部平台</option></select></label><label>最大下载线程<input type="number" min={1} value={draft.max_downloads} onChange={e => setDraft({ ...draft, max_downloads: Number(e.target.value) })} /></label><label className="check"><input type="checkbox" checked={draft.auto_resume} onChange={e => setDraft({ ...draft, auto_resume: e.target.checked })} />服务重启后自动恢复未完成任务</label><button onClick={save}>保存设置</button></div>;
+  function update(next: Settings) { setDraft(next); setDirty(true); }
+  async function save() {
+    try {
+      const saved = await api<Settings>('/api/settings', draft);
+      setSettings(saved);
+      setDraft(saved);
+      setDirty(false);
+      setToast('设置已保存');
+    } catch (e: any) { setToast(e.message); }
+  }
+  async function pickDirectory() {
+    if (!config?.can_pick_directory) {
+      const picked = window.prompt('当前浏览器无法读取本机目录路径，请手动输入保存目录：', draft.default_download_dir || '/storage/emulated/0/Download/steamdl');
+      if (picked?.trim()) update({ ...draft, default_download_dir: picked.trim() });
+      return;
+    }
+    try {
+      const res = await api<{ path?: string; download_dir?: string }>('/api/pick-directory', {});
+      const picked = res.path || res.download_dir || '';
+      if (picked) update({ ...draft, default_download_dir: picked });
+    } catch (e: any) { setToast(e.message); }
+  }
+  async function loadJobLog(jobId: string) {
+    const job = await api<Job>(`/api/jobs/${jobId}`);
+    setActiveJob(job);
+  }
+  const logText = activeJob?.log || loginState.log || '';
+  return <section className="grid two">
+    <div className="card form">
+      <h3>设置</h3>
+      <label>默认下载目录
+        <div className="row inlineRow"><input value={draft.default_download_dir} onChange={e => update({ ...draft, default_download_dir: e.target.value })} placeholder="/storage/emulated/0/Download/steamdl" /><button type="button" onClick={pickDirectory}>{config?.can_pick_directory ? '选择' : '填写'}</button></div>
+      </label>
+      <label>默认平台<select value={draft.default_platform_os} onChange={e => update({ ...draft, default_platform_os: e.target.value })}><option value="windows">Windows</option><option value="linux">Linux</option><option value="any">全部平台</option></select></label>
+      <label>最大下载线程<input type="number" min={1} value={draft.max_downloads} onChange={e => update({ ...draft, max_downloads: Number(e.target.value) })} /></label>
+      <label className="check"><input type="checkbox" checked={draft.auto_resume} onChange={e => update({ ...draft, auto_resume: e.target.checked })} />服务重启后自动恢复未完成任务</label>
+      <button onClick={save}>保存设置</button>
+    </div>
+    <div className="card detail">
+      <div className="detailHead"><h3>日志</h3><button className="ghost" onClick={() => refresh().catch(e => setToast(e.message))}>刷新</button></div>
+      {jobs.length > 0 && <label>选择任务日志<select value={activeJob?.job_id || ''} onChange={e => e.target.value && loadJobLog(e.target.value).catch(err => setToast(err.message))}><option value="">登录日志 / 当前任务</option>{jobs.map(job => <option key={job.job_id} value={job.job_id}>{job.kind} {job.id} · {stateText[job.state] || job.state}</option>)}</select></label>}
+      {activeJob && <p className="muted">当前任务：{activeJob.kind} {activeJob.id} · {stateText[activeJob.state] || activeJob.state}</p>}
+      {!activeJob && loginState.state !== 'idle' && <p className="muted">当前登录流程：{stateText[loginState.state] || loginState.state}</p>}
+      <pre className="expanded">{logText || '暂无日志'}</pre>
+    </div>
+  </section>;
 }
 
 function title(tab: Tab) {
