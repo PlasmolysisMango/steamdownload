@@ -112,13 +112,12 @@ export function App() {
   }, [loginState.state]);
 
   useEffect(() => {
-    if (loginState.state !== 'done') { autoLibrarySyncRef.current = ''; return; }
-    if (!selectedAccount || !accounts.includes(selectedAccount)) return;
-    const key = `${selectedAccount}:${loginState.state}`;
+    if (!selectedAccount || !accounts.includes(selectedAccount)) { autoLibrarySyncRef.current = ''; return; }
+    const key = selectedAccount;
     if (autoLibrarySyncRef.current === key) return;
     autoLibrarySyncRef.current = key;
     api('/api/library/sync', { username: selectedAccount, mode: 'incremental' }).catch(() => {});
-  }, [loginState.state, selectedAccount, accounts.join('|')]);
+  }, [selectedAccount, accounts.join('|')]);
 
   useEffect(() => {
     const updateNetwork = () => setServiceOnline(navigator.onLine);

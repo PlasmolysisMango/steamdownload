@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using SQLitePCL;
@@ -122,6 +123,25 @@ CREATE TABLE IF NOT EXISTS accounts (
   saved_password TEXT,
   updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS library_games (
+  username TEXT NOT NULL,
+  app_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  install_dir TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(username, app_id)
+);
+CREATE TABLE IF NOT EXISTS library_candidates (
+  username TEXT NOT NULL,
+  app_id INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(username, app_id)
+);
+CREATE TABLE IF NOT EXISTS library_meta (
+  username TEXT PRIMARY KEY,
+  last_sync_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_library_games_username_name ON library_games(username, name);
 ");
                 EnsureAccountColumn(conn, "remember_password", "INTEGER NOT NULL DEFAULT 0");
                 EnsureAccountColumn(conn, "saved_password", "TEXT");
@@ -443,6 +463,110 @@ ON CONFLICT(username) DO UPDATE SET
                 Add(cmd, "$username", username.Trim());
                 Add(cmd, "$now", Now());
                 cmd.ExecuteNonQuery();
+            }
+        }
+
+        internal (List<LibraryGameItem> Items, HashSet<uint> CandidateAppIds, string LastSyncAt) LoadLibraryCache(string username)
+        {
+            var items = new List<LibraryGameItem>();
+            var candidates = new HashSet<uint>();
+            if (string.IsNullOrWhiteSpace(username)) return (items, candidates, "");
+            username = username.Trim();
+            lock (_sync)
+            {
+                using var conn = OpenConnection();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT app_id, name, install_dir FROM library_games WHERE username = $username ORDER BY name";
+                    Add(cmd, "$username", username);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        items.Add(new LibraryGameItem
+                        {
+                            AppId = (uint)reader.GetInt64(0),
+                            Name = reader.GetString(1),
+                            InstallDir = reader.GetString(2),
+                        });
+                    }
+                }
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT app_id FROM library_candidates WHERE username = $username";
+                    Add(cmd, "$username", username);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read()) candidates.Add((uint)reader.GetInt64(0));
+                }
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT last_sync_at FROM library_meta WHERE username = $username";
+                    Add(cmd, "$username", username);
+                    return (items, candidates, cmd.ExecuteScalar() as string ?? "");
+                }
+            }
+        }
+
+        internal void SaveLibraryCache(string username, IEnumerable<LibraryGameItem> items, IEnumerable<uint> candidateAppIds, string lastSyncAt)
+        {
+            if (string.IsNullOrWhiteSpace(username)) return;
+            username = username.Trim();
+            var now = Now();
+            var itemList = (items ?? []).GroupBy(x => x.AppId).Select(g => g.First()).ToList();
+            var candidateList = (candidateAppIds ?? []).Distinct().ToList();
+            lock (_sync)
+            {
+                using var conn = OpenConnection();
+                using var tx = conn.BeginTransaction();
+                using (var deleteGames = conn.CreateCommand())
+                {
+                    deleteGames.Transaction = tx;
+                    deleteGames.CommandText = "DELETE FROM library_games WHERE username = $username";
+                    Add(deleteGames, "$username", username);
+                    deleteGames.ExecuteNonQuery();
+                }
+                using (var deleteCandidates = conn.CreateCommand())
+                {
+                    deleteCandidates.Transaction = tx;
+                    deleteCandidates.CommandText = "DELETE FROM library_candidates WHERE username = $username";
+                    Add(deleteCandidates, "$username", username);
+                    deleteCandidates.ExecuteNonQuery();
+                }
+                foreach (var item in itemList)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.Transaction = tx;
+                    cmd.CommandText = @"INSERT INTO library_games (username, app_id, name, install_dir, updated_at)
+VALUES ($username, $app_id, $name, $install_dir, $updated_at)";
+                    Add(cmd, "$username", username);
+                    Add(cmd, "$app_id", (long)item.AppId);
+                    Add(cmd, "$name", string.IsNullOrWhiteSpace(item.Name) ? $"App {item.AppId}" : item.Name);
+                    Add(cmd, "$install_dir", item.InstallDir ?? "");
+                    Add(cmd, "$updated_at", now);
+                    cmd.ExecuteNonQuery();
+                }
+                foreach (var appId in candidateList)
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.Transaction = tx;
+                    cmd.CommandText = "INSERT INTO library_candidates (username, app_id, updated_at) VALUES ($username, $app_id, $updated_at)";
+                    Add(cmd, "$username", username);
+                    Add(cmd, "$app_id", (long)appId);
+                    Add(cmd, "$updated_at", now);
+                    cmd.ExecuteNonQuery();
+                }
+                using (var meta = conn.CreateCommand())
+                {
+                    meta.Transaction = tx;
+                    meta.CommandText = @"INSERT INTO library_meta (username, last_sync_at)
+VALUES ($username, $last_sync_at)
+ON CONFLICT(username) DO UPDATE SET last_sync_at = excluded.last_sync_at";
+                    Add(meta, "$username", username);
+                    Add(meta, "$last_sync_at", string.IsNullOrWhiteSpace(lastSyncAt) ? now : lastSyncAt);
+                    meta.ExecuteNonQuery();
+                }
+                tx.Commit();
             }
         }
 

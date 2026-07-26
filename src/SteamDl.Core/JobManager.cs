@@ -371,6 +371,13 @@ namespace SteamDl.Core
             string lastSyncAt = "";
             lock (_sync)
             {
+                if (!forceFullSync && (_librarySync.State != "running") &&
+                    (!string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase) ||
+                     (_librarySync.Items.Count == 0 && _librarySync.KnownCandidateAppIds.Count == 0)))
+                {
+                    LoadLibraryCacheLocked(username);
+                }
+
                 if (_librarySync.State == "running" && string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase))
                 {
                     return LibrarySyncJsonLocked();
@@ -378,7 +385,7 @@ namespace SteamDl.Core
 
                 var canIncremental = !forceFullSync
                     && string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase)
-                    && _librarySync.Items.Count > 0;
+                    && (_librarySync.Items.Count > 0 || _librarySync.KnownCandidateAppIds.Count > 0);
                 syncMode = canIncremental ? "incremental" : "full";
                 if (canIncremental)
                 {
@@ -407,6 +414,13 @@ namespace SteamDl.Core
         {
             lock (_sync)
             {
+                if (!string.IsNullOrWhiteSpace(username) && (_librarySync.State != "running") &&
+                    (!string.Equals(_librarySync.Username, username.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                     (_librarySync.Items.Count == 0 && _librarySync.KnownCandidateAppIds.Count == 0)))
+                {
+                    LoadLibraryCacheLocked(username.Trim());
+                }
+
                 if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(_librarySync.Username) &&
                     !string.Equals(username.Trim(), _librarySync.Username, StringComparison.OrdinalIgnoreCase))
                 {
@@ -490,6 +504,7 @@ namespace SteamDl.Core
                 var doneMessage = $"游戏库{(syncMode == "full" ? "全量" : "增量")}同步完成，共显示 {LibrarySyncItemCount(username)} 个游戏。";
                 AppendLoginLog(doneMessage);
                 UpdateLibrarySync(username, s => { s.State = "done"; s.LastSyncAt = DateTime.UtcNow.ToString("O"); s.Message = doneMessage; });
+                PersistLibraryCache(username);
             }
             catch (Exception ex)
             {
@@ -501,6 +516,39 @@ namespace SteamDl.Core
                 try { session?.Disconnect(); }
                 catch { }
             }
+        }
+
+        void LoadLibraryCacheLocked(string username)
+        {
+            var cache = _store.LoadLibraryCache(username);
+            if (cache.Items.Count == 0 && cache.CandidateAppIds.Count == 0) return;
+            _librarySync = new LibrarySyncState
+            {
+                Username = username,
+                State = "done",
+                SyncMode = "incremental",
+                LastSyncAt = cache.LastSyncAt,
+                CandidateAppCount = cache.CandidateAppIds.Count,
+                ScannedAppCount = cache.CandidateAppIds.Count,
+                Message = $"已加载上次同步的游戏库，共 {cache.Items.Count} 个游戏。",
+            };
+            foreach (var appId in cache.CandidateAppIds) _librarySync.KnownCandidateAppIds.Add(appId);
+            foreach (var item in cache.Items) _librarySync.Items.Add(item);
+        }
+
+        void PersistLibraryCache(string username)
+        {
+            List<LibraryGameItem> items;
+            HashSet<uint> candidates;
+            string lastSyncAt;
+            lock (_sync)
+            {
+                if (!string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase)) return;
+                items = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir }).ToList();
+                candidates = _librarySync.KnownCandidateAppIds.ToHashSet();
+                lastSyncAt = _librarySync.LastSyncAt;
+            }
+            _store.SaveLibraryCache(username, items, candidates, lastSyncAt);
         }
 
         int LibrarySyncItemCount(string username)
