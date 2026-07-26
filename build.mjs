@@ -60,10 +60,13 @@ const androidProject = path.join(root, 'src', 'SteamDl.Android', 'SteamDl.Androi
 const webProject = path.join(root, 'src', 'SteamDl.Web');
 const serverOut = path.join(root, 'artifacts', 'server');
 const apkOut = path.join(root, 'artifacts', 'apk');
-const keystore = opts.keystore || process.env.ANDROID_KEYSTORE || path.join(toolsDir, 'keystore', 'steamdl-release.keystore');
-const keyAlias = opts.keyAlias || process.env.ANDROID_KEY_ALIAS || 'steamdl';
-const storePass = opts.storePass || process.env.ANDROID_STORE_PASS || 'steamdl-changeit';
-const keyPass = opts.keyPass || process.env.ANDROID_KEY_PASS || storePass;
+const localSigningEnvFile = opts.signingEnv || process.env.ANDROID_SIGNING_ENV || path.join(toolsDir, 'keystore', 'github-actions-secrets.env');
+const localSigningEnv = readEnvFile(localSigningEnvFile);
+const keystoreBase64 = opts.keystoreBase64 || process.env.ANDROID_KEYSTORE_BASE64 || localSigningEnv.ANDROID_KEYSTORE_BASE64 || '';
+const keystore = opts.keystore || process.env.ANDROID_KEYSTORE || localSigningEnv.ANDROID_KEYSTORE || path.join(toolsDir, 'keystore', 'steamdl-release.keystore');
+const keyAlias = opts.keyAlias || process.env.ANDROID_KEY_ALIAS || localSigningEnv.ANDROID_KEY_ALIAS || 'steamdl';
+const storePass = opts.storePass || process.env.ANDROID_STORE_PASS || localSigningEnv.ANDROID_STORE_PASS || 'steamdl-changeit';
+const keyPass = opts.keyPass || process.env.ANDROID_KEY_PASS || localSigningEnv.ANDROID_KEY_PASS || storePass;
 const forceWebBuild = opts.forceWeb === 'true' || process.env.FORCE_WEB_BUILD === '1';
 const forceRestore = opts.forceRestore === 'true' || process.env.FORCE_RESTORE === '1';
 const forceApkBuild = opts.forceApk === 'true' || process.env.FORCE_APK_BUILD === '1';
@@ -107,7 +110,7 @@ async function main() {
 }
 
 function help() {
-  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build-web\n  node build.mjs docker-build-web\n  node build.mjs build\n  node build.mjs docker-build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs docker-publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --nuget-source=${nugetSources.join(',')}\n  node build.mjs build-apk --keystore=/path/release.keystore --key-alias=steamdl --store-pass=*** --key-pass=***\n  node build.mjs docker-build-apk --config=Release\n  node build.mjs clean\n  node build.mjs clean-artifacts\n\nDownload/build source options:\n  --cn-mirror=true or CN_MIRROR=1 (\u4f18\u5148\u4f7f\u7528\u56fd\u5185\u955c\u50cf\uff0c\u9ed8\u8ba4\u5173\u95ed)\n  --nuget-source=<url[,url...]> or NUGET_SOURCE=<url[,url...]>\n  --npm-registry=${npmRegistry} or NPM_REGISTRY=${npmRegistry}\n  --jdk-url=<url> or JDK_URL=<url>\n  --android-cmdline-tools-url=<url> or ANDROID_CMDLINE_TOOLS_URL=<url>\n  --jdk-version=17.0.19_10 or JDK_VERSION=17.0.19_10\n  --web-docker-image=${webDockerImage} or WEB_DOCKER_IMAGE=${webDockerImage}\n  --dotnet-docker-image=${dotnetDockerImage} or DOTNET_DOCKER_IMAGE=${dotnetDockerImage}\n  --force-web=true or FORCE_WEB_BUILD=1\n  --force-restore=true or FORCE_RESTORE=1\n  --force-apk=true or FORCE_APK_BUILD=1\n  --skip-probe=true or SKIP_SOURCE_PROBE=1 (关闭构建前的源可达性探测)\n  --probe-timeout=4000 or SOURCE_PROBE_TIMEOUT=4000 (单个源探测超时毫秒)\n  --download-timeout=20000 or DOWNLOAD_TIMEOUT=20000 (单次下载无活动超时毫秒)\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  All sources default to official endpoints: NuGet=${nugetSources.join(' -> ')}, npm=${npmRegistry}.\n  Pass --cn-mirror=true (or CN_MIRROR=1) to prefer domestic mirrors for NuGet/npm/JDK/Android cmdline-tools/Docker images.\n  Any single source can still be overridden explicitly (--nuget-source/--npm-registry/--jdk-url/--android-cmdline-tools-url/--web-docker-image/--dotnet-docker-image) regardless of --cn-mirror.\n  Before build/install-deps/restore actually run, NuGet/npm/JDK/Android cmdline-tools sources are probed with a short HEAD request; unreachable ones are pushed to the back and (unless explicitly overridden) official/mirror fallbacks are auto-added so a dead source fails fast instead of hanging.\n  Release APKs are signed. If no keystore is provided, a local keystore is generated at .tools/keystore/.\n  install-deps installs/restores Web npm, .NET SDK, NuGet packages, JDK, Android SDK and Android workload.\n  Incremental builds skip fresh Web output, fresh Android restore assets and fresh APK output unless force flags are used.\n  Non-docker commands always use local toolchain. Docker is only used by explicit docker-* commands.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n`);
+  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build-web\n  node build.mjs docker-build-web\n  node build.mjs build\n  node build.mjs docker-build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs docker-publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --nuget-source=${nugetSources.join(',')}\n  node build.mjs build-apk --keystore=/path/release.keystore --key-alias=steamdl --store-pass=*** --key-pass=***\n  node build.mjs docker-build-apk --config=Release\n  node build.mjs clean\n  node build.mjs clean-artifacts\n\nDownload/build source options:\n  --cn-mirror=true or CN_MIRROR=1 (\u4f18\u5148\u4f7f\u7528\u56fd\u5185\u955c\u50cf\uff0c\u9ed8\u8ba4\u5173\u95ed)\n  --nuget-source=<url[,url...]> or NUGET_SOURCE=<url[,url...]>\n  --npm-registry=${npmRegistry} or NPM_REGISTRY=${npmRegistry}\n  --jdk-url=<url> or JDK_URL=<url>\n  --android-cmdline-tools-url=<url> or ANDROID_CMDLINE_TOOLS_URL=<url>\n  --jdk-version=17.0.19_10 or JDK_VERSION=17.0.19_10\n  --web-docker-image=${webDockerImage} or WEB_DOCKER_IMAGE=${webDockerImage}\n  --dotnet-docker-image=${dotnetDockerImage} or DOTNET_DOCKER_IMAGE=${dotnetDockerImage}\n  --force-web=true or FORCE_WEB_BUILD=1\n  --force-restore=true or FORCE_RESTORE=1\n  --force-apk=true or FORCE_APK_BUILD=1\n  --skip-probe=true or SKIP_SOURCE_PROBE=1 (关闭构建前的源可达性探测)\n  --probe-timeout=4000 or SOURCE_PROBE_TIMEOUT=4000 (单个源探测超时毫秒)\n  --download-timeout=20000 or DOWNLOAD_TIMEOUT=20000 (单次下载无活动超时毫秒)\n  --signing-env=.tools/keystore/github-actions-secrets.env or ANDROID_SIGNING_ENV=<file> (本地 Release 签名配置文件)\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  All sources default to official endpoints: NuGet=${nugetSources.join(' -> ')}, npm=${npmRegistry}.\n  Pass --cn-mirror=true (or CN_MIRROR=1) to prefer domestic mirrors for NuGet/npm/JDK/Android cmdline-tools/Docker images.\n  Any single source can still be overridden explicitly (--nuget-source/--npm-registry/--jdk-url/--android-cmdline-tools-url/--web-docker-image/--dotnet-docker-image) regardless of --cn-mirror.\n  Before build/install-deps/restore actually run, NuGet/npm/JDK/Android cmdline-tools sources are probed with a short HEAD request; unreachable ones are pushed to the back and (unless explicitly overridden) official/mirror fallbacks are auto-added so a dead source fails fast instead of hanging.\n  Release APKs are signed. If no keystore is provided, local Release builds first read .tools/keystore/github-actions-secrets.env and restore ANDROID_KEYSTORE_BASE64 to .tools/keystore/; otherwise a local keystore is generated.\n  install-deps installs/restores Web npm, .NET SDK, NuGet packages, JDK, Android SDK and Android workload.\n  Incremental builds skip fresh Web output, fresh Android restore assets and fresh APK output unless force flags are used.\n  Non-docker commands always use local toolchain. Docker is only used by explicit docker-* commands.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n  APK artifacts are standalone installable packages; build-apk forces EmbedAssembliesIntoApk=true so Debug artifacts do not rely on fast deployment.\n`);
 }
 
 function parseOptions(optionArgs) {
@@ -119,6 +122,24 @@ function parseOptions(optionArgs) {
     out[key.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
   }
   return out;
+}
+
+function readEnvFile(file) {
+  if (!file || !exists(file)) return {};
+  const env = {};
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const key = trimmed.substring(0, eq).trim();
+    let value = trimmed.substring(eq + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.substring(1, value.length - 1);
+    }
+    env[key] = value;
+  }
+  return env;
 }
 
 function parseList(value, fallback) {
@@ -723,7 +744,7 @@ async function buildApk() {
   rmrf(apkOut);
   mkdirp(apkOut);
   const signingArgs = config.toLowerCase() === 'release' ? ensureReleaseKeystore() : [];
-  dotnet(['publish', androidProject, '-c', config, '-p:AndroidPackageFormat=apk', '--no-restore', ...signingArgs], androidEnv());
+  dotnet(['publish', androidProject, '-c', config, '-p:AndroidPackageFormat=apk', '-p:EmbedAssembliesIntoApk=true', '--no-restore', ...signingArgs], androidEnv());
   writeApkStamp();
   copyApksToArtifacts();
 }
@@ -760,7 +781,7 @@ async function dockerBuildApk() {
     '-e', 'HOME=/w/.tools/home',
     '-e', 'DOTNET_CLI_HOME=/w/.tools/home',
     dotnetDockerImage,
-    'bash', '-lc', `${restoreCommand} && /w/.tools/dotnet/dotnet publish /w/src/SteamDl.Android/SteamDl.Android.csproj -c ${quoteShell(config)} -p:AndroidPackageFormat=apk --no-restore ${signingArgs}`,
+    'bash', '-lc', `${restoreCommand} && /w/.tools/dotnet/dotnet publish /w/src/SteamDl.Android/SteamDl.Android.csproj -c ${quoteShell(config)} -p:AndroidPackageFormat=apk -p:EmbedAssembliesIntoApk=true --no-restore ${signingArgs}`,
   ]);
   writeApkStamp();
   copyApksToArtifacts();
@@ -768,6 +789,10 @@ async function dockerBuildApk() {
 
 function ensureReleaseKeystore() {
   mkdirp(path.dirname(keystore));
+  if (!exists(keystore) && keystoreBase64) {
+    fs.writeFileSync(keystore, Buffer.from(keystoreBase64.replace(/\s+/g, ''), 'base64'));
+    console.log(`已从本地签名配置还原 keystore: ${keystore}`);
+  }
   if (!exists(keystore)) {
     const keytool = path.join(getJavaHome(), 'bin', isWin ? 'keytool.exe' : 'keytool');
     const keytoolExe = exists(keytool) ? keytool : executable(isWin ? 'keytool.exe' : 'keytool');
@@ -812,7 +837,12 @@ function copyApksToArtifacts() {
   mkdirp(apkOut);
   const apkFiles = findFilesShallow(androidApkSearchDir(), f => f.endsWith('.apk'));
   if (!apkFiles.length) throw new Error('未找到 APK 产物');
-  for (const file of apkFiles) fs.copyFileSync(file, path.join(apkOut, path.basename(file)));
+  const signedApks = apkFiles.filter(f => /-Signed\.apk$/i.test(path.basename(f)));
+  const selectedApks = signedApks.length ? signedApks : apkFiles;
+  const skipped = apkFiles.filter(f => !selectedApks.includes(f));
+  for (const file of skipped) console.log(`跳过未签名 APK: ${file}`);
+  if (!signedApks.length) console.warn('未找到 *-Signed.apk，仅复制当前构建产物。若该 APK 无法安装，请检查签名配置。');
+  for (const file of selectedApks) fs.copyFileSync(file, path.join(apkOut, path.basename(file)));
   console.log(`APK 产物目录: ${apkOut}`);
   for (const file of fs.readdirSync(apkOut).filter(f => f.endsWith('.apk'))) console.log(path.join(apkOut, file));
 }
