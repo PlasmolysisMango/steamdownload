@@ -38,6 +38,7 @@ namespace SteamDl.Core
         public uint AppId { get; set; }
         public string Name { get; set; } = "";
         public string InstallDir { get; set; } = "";
+        public ulong SizeBytes { get; set; }
     }
 
     sealed class LibrarySyncState
@@ -179,6 +180,8 @@ namespace SteamDl.Core
                 error = loginError ?? "请先在账号页面完成登录";
                 return false;
             }
+
+            FillInstallDirNameFromLibraryCache(request);
 
             lock (_sync)
             {
@@ -389,7 +392,7 @@ namespace SteamDl.Core
                 syncMode = canIncremental ? "incremental" : "full";
                 if (canIncremental)
                 {
-                    preservedItems = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir }).ToList();
+                    preservedItems = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir, SizeBytes = x.SizeBytes }).ToList();
                     preservedCandidates = _librarySync.KnownCandidateAppIds.ToHashSet();
                     lastSyncAt = _librarySync.LastSyncAt;
                 }
@@ -544,7 +547,7 @@ namespace SteamDl.Core
             lock (_sync)
             {
                 if (!string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase)) return;
-                items = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir }).ToList();
+                items = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir, SizeBytes = x.SizeBytes }).ToList();
                 candidates = _librarySync.KnownCandidateAppIds.ToHashSet();
                 lastSyncAt = _librarySync.LastSyncAt;
             }
@@ -585,6 +588,8 @@ namespace SteamDl.Core
                     ["name"] = item.Name,
                     ["installdir"] = item.InstallDir,
                     ["install_dir"] = item.InstallDir,
+                    ["size_bytes"] = item.SizeBytes,
+                    ["size_text"] = item.SizeBytes > 0 ? FormatBytes(item.SizeBytes) : "大小待获取",
                     ["header_image"] = $"https://cdn.cloudflare.steamstatic.com/steam/apps/{item.AppId}/header.jpg",
                 });
             }
@@ -622,9 +627,40 @@ namespace SteamDl.Core
                 AppId = appId,
                 Name = name,
                 InstallDir = appInfo.KeyValues["config"]["installdir"].AsString() ?? string.Empty,
+                SizeBytes = TryReadAppSizeBytes(appInfo.KeyValues),
             };
             return true;
         }
+        static ulong TryReadAppSizeBytes(KeyValue root)
+        {
+            if (root == null || root == KeyValue.Invalid) return 0;
+            var direct = TryReadUInt64(root["common"]["size"])
+                ?? TryReadUInt64(root["common"]["size_bytes"])
+                ?? TryReadUInt64(root["extended"]["size"])
+                ?? TryReadUInt64(root["extended"]["size_bytes"]);
+            if (direct.HasValue) return direct.Value;
+
+            ulong total = 0;
+            var depots = root["depots"];
+            if (depots == null || depots == KeyValue.Invalid) return 0;
+            foreach (var depot in depots.Children)
+            {
+                var size = TryReadUInt64(depot["maxsize"])
+                    ?? TryReadUInt64(depot["size"])
+                    ?? TryReadUInt64(depot["download_size"]);
+                if (size.HasValue) total += size.Value;
+            }
+            return total;
+        }
+
+        static ulong? TryReadUInt64(KeyValue value)
+        {
+            if (value == null || value == KeyValue.Invalid) return null;
+            var text = value.AsString();
+            if (ulong.TryParse(text, out var parsed)) return parsed;
+            return null;
+        }
+
         static void AddPackageAppIds(KeyValue node, ISet<uint> appIds)
         {
             if (node == null || node == KeyValue.Invalid) return;
@@ -1047,6 +1083,36 @@ namespace SteamDl.Core
             if (!ulong.TryParse(request.Id, out _)) return "无效的 AppID/物品 ID";
             if (request.Kind != "app" && request.Kind != "workshop") return "无效的任务类型";
             return null;
+        }
+
+        static void FillInstallDirNameFromLibraryCache(DownloadRequest request)
+        {
+            if (request == null || request.Kind != "app" || !uint.TryParse(request.Id, out var appId)) return;
+            if (string.IsNullOrWhiteSpace(request.Username)) return;
+
+            LibraryGameItem cached = null;
+            lock (Instance._sync)
+            {
+                if (string.Equals(Instance._librarySync.Username, request.Username.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    cached = Instance._librarySync.Items.FirstOrDefault(x => x.AppId == appId);
+                }
+            }
+
+            if (cached == null)
+            {
+                var cache = Instance._store.LoadLibraryCache(request.Username);
+                cached = cache.Items.FirstOrDefault(x => x.AppId == appId);
+            }
+
+            if (!string.IsNullOrWhiteSpace(cached?.InstallDir))
+            {
+                request.InstallDirName = cached.InstallDir;
+            }
+            else if (string.IsNullOrWhiteSpace(request.InstallDirName) && !string.IsNullOrWhiteSpace(cached?.Name))
+            {
+                request.InstallDirName = cached.Name;
+            }
         }
 
         static string ResolveOutputDir(DownloadRequest request)

@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS library_games (
   app_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   install_dir TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
   PRIMARY KEY(username, app_id)
 );
@@ -146,6 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_library_games_username_name ON library_games(user
                 EnsureAccountColumn(conn, "remember_password", "INTEGER NOT NULL DEFAULT 0");
                 EnsureAccountColumn(conn, "saved_password", "TEXT");
                 EnsureAccountColumn(conn, "updated_at", "TEXT");
+                EnsureLibraryGameColumn(conn, "size_bytes", "INTEGER NOT NULL DEFAULT 0");
                 EnsureDefaultSetting(conn, "default_download_dir", AppPaths.DefaultDownloadDir());
                 EnsureDefaultSetting(conn, "default_platform_os", "windows");
                 EnsureDefaultSetting(conn, "max_downloads", "8");
@@ -477,7 +479,7 @@ ON CONFLICT(username) DO UPDATE SET
                 using var conn = OpenConnection();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT app_id, name, install_dir FROM library_games WHERE username = $username ORDER BY name";
+                    cmd.CommandText = "SELECT app_id, name, install_dir, size_bytes FROM library_games WHERE username = $username ORDER BY name";
                     Add(cmd, "$username", username);
                     using var reader = cmd.ExecuteReader();
                     while (reader.Read())
@@ -487,6 +489,7 @@ ON CONFLICT(username) DO UPDATE SET
                             AppId = (uint)reader.GetInt64(0),
                             Name = reader.GetString(1),
                             InstallDir = reader.GetString(2),
+                            SizeBytes = (ulong)reader.GetInt64(3),
                         });
                     }
                 }
@@ -537,12 +540,13 @@ ON CONFLICT(username) DO UPDATE SET
                 {
                     using var cmd = conn.CreateCommand();
                     cmd.Transaction = tx;
-                    cmd.CommandText = @"INSERT INTO library_games (username, app_id, name, install_dir, updated_at)
-VALUES ($username, $app_id, $name, $install_dir, $updated_at)";
+                    cmd.CommandText = @"INSERT INTO library_games (username, app_id, name, install_dir, size_bytes, updated_at)
+VALUES ($username, $app_id, $name, $install_dir, $size_bytes, $updated_at)";
                     Add(cmd, "$username", username);
                     Add(cmd, "$app_id", (long)item.AppId);
                     Add(cmd, "$name", string.IsNullOrWhiteSpace(item.Name) ? $"App {item.AppId}" : item.Name);
                     Add(cmd, "$install_dir", item.InstallDir ?? "");
+                    Add(cmd, "$size_bytes", item.SizeBytes > long.MaxValue ? long.MaxValue : (long)item.SizeBytes);
                     Add(cmd, "$updated_at", now);
                     cmd.ExecuteNonQuery();
                 }
@@ -618,6 +622,18 @@ ON CONFLICT(username) DO UPDATE SET last_sync_at = excluded.last_sync_at";
             try
             {
                 Execute(conn, $"ALTER TABLE accounts ADD COLUMN {name} {definition}");
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
+            {
+                // column already exists
+            }
+        }
+
+        static void EnsureLibraryGameColumn(SqliteConnection conn, string name, string definition)
+        {
+            try
+            {
+                Execute(conn, $"ALTER TABLE library_games ADD COLUMN {name} {definition}");
             }
             catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
             {

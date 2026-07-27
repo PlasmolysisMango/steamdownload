@@ -45,6 +45,9 @@ namespace SteamDl.Android
             _webView = new WebView(this);
             _webView.Settings.JavaScriptEnabled = true;
             _webView.Settings.DomStorageEnabled = true;
+            _webView.Settings.SetSupportZoom(false);
+            _webView.Settings.BuiltInZoomControls = false;
+            _webView.Settings.DisplayZoomControls = false;
             _webView.SetWebViewClient(new WebViewClient());
             WebApi.PickDirectoryHandler = PickDirectory;
             SetContentView(_webView);

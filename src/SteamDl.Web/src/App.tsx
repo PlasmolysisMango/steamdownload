@@ -27,10 +27,10 @@ type Settings = {
 };
 
 type Config = { can_pick_directory: boolean; can_open_output: boolean; download_dir: string };
-type LibraryGame = { app_id: string; name: string; header_image?: string; install_dir?: string; installdir?: string };
+type LibraryGame = { app_id: string; name: string; header_image?: string; install_dir?: string; installdir?: string; size_bytes?: number; size_text?: string };
 type AccountDetail = { username: string; logged_in: boolean; remember_password: boolean; has_saved_password: boolean; last_used_at?: string };
 type LoginState = { username?: string; state: string; prompt?: string; prompt_secret?: boolean; error?: string; log?: string; remember_password?: boolean };
-type DownloadSeed = { kind: string; id: string; name?: string; install_dir?: string; installdir?: string } | null;
+type DownloadSeed = { kind: string; id: string; name?: string; install_dir?: string; installdir?: string; size_bytes?: number; size_text?: string } | null;
 type Tab = 'accounts' | 'download' | 'library' | 'jobs' | 'settings';
 
 async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
@@ -48,6 +48,19 @@ const stateText: Record<string, string> = {
   idle: '空闲', queued: '排队中', starting: '启动中', running: '下载中',
   waiting_input: '等待输入', interrupted: '已中断', done: '完成', error: '出错', cancelled: '已取消',
 };
+
+function formatBytes(bytes?: number) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return '大小待获取';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let next = value;
+  let unit = 0;
+  while (next >= 1024 && unit < units.length - 1) {
+    next /= 1024;
+    unit++;
+  }
+  return `${next.toFixed(next >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
 
 const tabs: [Tab, string][] = [['accounts', '账号'], ['download', '下载'], ['library', '游戏库'], ['jobs', '任务'], ['settings', '设置']];
 
@@ -227,9 +240,18 @@ function DownloadPage({ settings, config, selectedAccount, seed, clearSeed, setT
 
   useEffect(() => {
     if (!seed) return;
+    const seedInstallDir = seed.installdir || seed.install_dir || '';
     setParsed({ kind: seed.kind, id: seed.id });
-    setAppInfo(seed.name ? { name: seed.name, installdir: seed.installdir || seed.install_dir, install_dir: seed.install_dir || seed.installdir } : null);
-    if (seed.kind === 'app') api(`/api/appinfo/${seed.id}`).then(setAppInfo).catch(() => {});
+    setAppInfo(seed.name ? { name: seed.name, installdir: seedInstallDir, install_dir: seedInstallDir, size_bytes: seed.size_bytes, size_text: seed.size_text } : null);
+    if (seed.kind === 'app') {
+      api<any>(`/api/appinfo/${seed.id}`).then(info => setAppInfo({
+        ...info,
+        name: info?.name || seed.name,
+        installdir: info?.installdir || info?.install_dir || seedInstallDir,
+        install_dir: info?.install_dir || info?.installdir || seedInstallDir,
+        size_bytes: Number(info?.size_bytes || seed.size_bytes || 0),
+      })).catch(() => {});
+    }
     clearSeed();
   }, [seed?.id]);
 
@@ -238,7 +260,7 @@ function DownloadPage({ settings, config, selectedAccount, seed, clearSeed, setT
       const next = await api<{ kind: string; id: string }>('/api/parse', { url });
       setParsed(next);
       setAppInfo(null);
-      if (next.kind === 'app') api(`/api/appinfo/${next.id}`).then(setAppInfo).catch(() => {});
+      if (next.kind === 'app') api<any>(`/api/appinfo/${next.id}`).then(info => setAppInfo({ ...info, size_bytes: Number(info?.size_bytes || 0) })).catch(() => {});
     } catch (e: any) { setToast(e.message); }
   }
 
@@ -264,7 +286,8 @@ function DownloadPage({ settings, config, selectedAccount, seed, clearSeed, setT
   async function start() {
     if (!parsed) return;
     try {
-      const res = await api<{ job: Job }>('/api/jobs', { kind: parsed.kind, id: parsed.id, username: selectedAccount, anonymous: false, os, depot, output_dir: outputDir, install_dir: appInfo?.installdir || appInfo?.install_dir, name: appInfo?.name });
+      const installDir = appInfo?.install_dir || appInfo?.installdir || appInfo?.name;
+      const res = await api<{ job: Job }>('/api/jobs', { kind: parsed.kind, id: parsed.id, username: selectedAccount, anonymous: false, os, depot, output_dir: outputDir, install_dir: installDir, installdir: installDir, name: appInfo?.name });
       setActiveJob(res.job);
       setToast(`任务已创建: ${res.job.job_id.slice(0, 8)}`);
       await refresh();
@@ -284,7 +307,7 @@ function DownloadPage({ settings, config, selectedAccount, seed, clearSeed, setT
     <div className="card cover">
       {appInfo?.header_image ? <img src={appInfo.header_image} /> : <div className="emptyCover">Steam</div>}
       <h3>{appInfo?.name || (parsed ? `${parsed.kind} ${parsed.id}` : '等待选择游戏')}</h3>
-      <p>{parsed ? `类型 ${parsed.kind} · ID ${parsed.id}` : '从游戏库选择，或解析链接后创建下载任务'}</p>
+      <p>{parsed ? `类型 ${parsed.kind} · ID ${parsed.id} · 待下载大小 ${formatBytes(appInfo?.size_bytes)}` : '从游戏库选择，或解析链接后创建下载任务'}</p>
     </div>
     <div className="card">
       <h3>下载选项</h3>
@@ -316,7 +339,7 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
     await api(`/api/jobs/${activeJob.job_id}/input`, { answer: input });
     await load(activeJob);
   }
-  return <section className="grid two">
+  return <section className="grid two jobsPage">
     <div className="card">
       <h3>任务历史</h3>
       <div className="jobList">{jobs.map(job => <button key={job.job_id} className="jobItem" onClick={() => load(job)}>
@@ -356,7 +379,7 @@ function LibraryPage({ selectedAccount, setToast, openDownload }: { selectedAcco
   }, [games, query, sortBy, sortDir]);
   function applyLibraryStatus(res: any) {
     const items = Array.isArray(res.items) ? res.items : [];
-    const nextGames = items.map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir }));
+    const nextGames = items.map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir, size_bytes: Number(x.size_bytes || 0), size_text: x.size_text }));
     setGames(nextGames);
     setMessage(res.message || `已同步 ${nextGames.length} 个游戏`);
     setProgress({ scanned: Number(res.scanned_app_count || 0), total: Number(res.app_count || 0), percent: Number(res.progress || 0), state: res.state || 'idle', mode: res.sync_mode || 'full' });
@@ -420,8 +443,8 @@ function LibraryPage({ selectedAccount, setToast, openDownload }: { selectedAcco
     </div>
     {games.length === 0 ? <div className="card span2"><p className="muted">{message || '尚未同步游戏库。点击“增量同步”会在首次自动全量读取当前账号拥有的游戏。'}</p></div> : visibleGames.length === 0 ? <div className="card span2"><p className="muted">当前搜索没有匹配的游戏。清空搜索框可查看已同步的全部游戏。</p></div> : <div className={`libraryResults span2 ${viewMode === 'list' ? 'list' : 'grid'}`}>{visibleGames.map(game => <div className="card game" key={game.app_id}>
       {game.header_image && <img src={game.header_image} />}
-      <div className="gameText"><h3>{game.name}</h3><p className="muted">AppID {game.app_id}</p></div>
-      <button className="primary block" onClick={() => openDownload({ kind: 'app', id: game.app_id, name: game.name, install_dir: game.install_dir || game.installdir })}>选择并下载</button>
+      <div className="gameText"><h3>{game.name}</h3><p className="muted">AppID {game.app_id} · 待下载大小 {formatBytes(game.size_bytes)}</p></div>
+      <button className="primary block" onClick={() => openDownload({ kind: 'app', id: game.app_id, name: game.name, install_dir: game.install_dir || game.installdir, installdir: game.installdir || game.install_dir, size_bytes: game.size_bytes, size_text: game.size_text })}>选择并下载</button>
     </div>)}</div>}
   </section>;
 }

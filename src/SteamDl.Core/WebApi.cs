@@ -435,18 +435,29 @@ namespace SteamDl.Core
 
         static DownloadRequest ToDownloadRequest(JsonObject body) => new()
         {
-            Kind = body?["kind"]?.GetValue<string>() ?? "app",
-            Id = (body?["id"]?.ToString() ?? body?["item_id"]?.ToString() ?? "").Trim(),
+            Kind = FirstNonBlank(body?["kind"]?.GetValue<string>(), "app"),
+            Id = FirstNonBlank(body?["id"]?.ToString(), body?["item_id"]?.ToString(), "").Trim(),
             Username = body?["username"]?.GetValue<string>(),
             Anonymous = body?["anonymous"]?.GetValue<bool>() ?? false,
-            Os = body?["os"]?.GetValue<string>() ?? "windows",
-            DepotId = body?["depot"]?.ToString() ?? body?["depot_id"]?.ToString(),
+            Os = FirstNonBlank(body?["os"]?.GetValue<string>(), "windows"),
+            DepotId = FirstNonBlank(body?["depot"]?.ToString(), body?["depot_id"]?.ToString()),
             OutputDir = body?["output_dir"]?.GetValue<string>(),
-            InstallDirName = body?["install_dir"]?.GetValue<string>()
-                ?? body?["installdir"]?.GetValue<string>()
-                ?? body?["name"]?.GetValue<string>(),
+            InstallDirName = FirstNonBlank(
+                body?["install_dir"]?.GetValue<string>(),
+                body?["installdir"]?.GetValue<string>(),
+                body?["name"]?.GetValue<string>()),
         };
 
+        
+        static string FirstNonBlank(params string[] values)
+        {
+            foreach (var value in values)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+            }
+            return null;
+        }
+        
         static AppSettings ParseSettings(JsonObject body) => new()
         {
             DefaultDownloadDir = body?["default_download_dir"]?.GetValue<string>() ?? JobStore.Instance.GetSettings().DefaultDownloadDir,
