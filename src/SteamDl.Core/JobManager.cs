@@ -390,6 +390,7 @@ namespace SteamDl.Core
 
         public bool DeleteJob(string jobId, bool deleteFiles, out string error)
         {
+            Console.WriteLine($"[delete-task] JobManager.DeleteJob start job_id={jobId} delete_files={deleteFiles}");
             error = null;
             JobRecord job;
             lock (_sync)
@@ -398,30 +399,44 @@ namespace SteamDl.Core
                 if (job == null)
                 {
                     error = "任务不存在";
+                    Console.WriteLine($"[delete-task] JobManager.DeleteJob failed job_id={jobId} reason=not_found");
                     return false;
                 }
 
                 if (jobId == _currentJobId && _busy)
                 {
                     error = "任务运行中，请先取消或暂停后再删除";
+                    Console.WriteLine($"[delete-task] JobManager.DeleteJob failed job_id={jobId} reason=busy current_job_id={_currentJobId}");
                     return false;
                 }
 
+                Console.WriteLine($"[delete-task] JobManager.DeleteJob deleting database record job_id={jobId} title={job.Name} output_dir={job.OutputDir}");
                 if (!_store.DeleteJob(jobId))
                 {
                     error = "任务不存在";
+                    Console.WriteLine($"[delete-task] JobManager.DeleteJob failed job_id={jobId} reason=store_delete_false");
                     return false;
                 }
 
                 if (_currentJobId == jobId) _currentJobId = null;
             }
 
-            if (deleteFiles && !TryDeleteOutputDir(job.OutputDir, out error)) return false;
+            if (deleteFiles)
+            {
+                Console.WriteLine($"[delete-task] JobManager.DeleteJob deleting files job_id={jobId} output_dir={job.OutputDir}");
+                if (!TryDeleteOutputDir(job.OutputDir, out error))
+                {
+                    Console.WriteLine($"[delete-task] JobManager.DeleteJob failed job_id={jobId} reason=file_delete_error error={error}");
+                    return false;
+                }
+            }
+            Console.WriteLine($"[delete-task] JobManager.DeleteJob succeeded job_id={jobId} delete_files={deleteFiles}");
             return true;
         }
 
         public bool DeleteAllJobs(bool deleteFiles, out string error)
         {
+            Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs start delete_files={deleteFiles}");
             error = null;
             List<JobRecord> jobs;
             lock (_sync)
@@ -429,19 +444,31 @@ namespace SteamDl.Core
                 if (_busy)
                 {
                     error = "任务运行中，请先取消或暂停后再删除全部任务";
+                    Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs failed reason=busy current_job_id={_currentJobId}");
                     return false;
                 }
 
                 jobs = _store.ListJobs(limit: int.MaxValue);
+                Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs deleting database records count={jobs.Count}");
                 _store.DeleteAllJobs();
                 _currentJobId = null;
             }
 
-            if (!deleteFiles) return true;
+            if (!deleteFiles)
+            {
+                Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs succeeded count={jobs.Count} delete_files=False");
+                return true;
+            }
             foreach (var dir in jobs.Select(x => x.OutputDir).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (!TryDeleteOutputDir(dir, out error)) return false;
+                Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs deleting files output_dir={dir}");
+                if (!TryDeleteOutputDir(dir, out error))
+                {
+                    Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs failed reason=file_delete_error output_dir={dir} error={error}");
+                    return false;
+                }
             }
+            Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs succeeded count={jobs.Count} delete_files=True");
             return true;
         }
 

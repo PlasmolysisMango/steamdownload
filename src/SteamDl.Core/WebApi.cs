@@ -187,11 +187,14 @@ namespace SteamDl.Core
                     {
                         var body = await ReadJsonAsync(req);
                         var deleteFiles = body?["delete_files"]?.GetValue<bool>() == true;
+                        Console.WriteLine($"[delete-task] API DELETE /api/jobs received delete_files={deleteFiles}");
                         if (!JobManager.Instance.DeleteAllJobs(deleteFiles, out var deleteAllError))
                         {
+                            Console.WriteLine($"[delete-task] API DELETE /api/jobs failed error={deleteAllError}");
                             await WriteJsonAsync(ctx, 409, Error(deleteAllError));
                             break;
                         }
+                        Console.WriteLine("[delete-task] API DELETE /api/jobs succeeded");
                         await WriteJsonAsync(ctx, 200, Ok());
                         break;
                     }
@@ -227,11 +230,14 @@ namespace SteamDl.Core
                     {
                         var body = await ReadJsonAsync(req);
                         var deleteFiles = body?["delete_files"]?.GetValue<bool>() == true;
+                        Console.WriteLine($"[delete-task] API DELETE /api/jobs/{{jobId}} received job_id={jobId} delete_files={deleteFiles}");
                         if (!JobManager.Instance.DeleteJob(jobId, deleteFiles, out var deleteError))
                         {
+                            Console.WriteLine($"[delete-task] API DELETE /api/jobs/{{jobId}} failed job_id={jobId} error={deleteError}");
                             await WriteJsonAsync(ctx, deleteError == "任务不存在" ? 404 : 409, Error(deleteError));
                             break;
                         }
+                        Console.WriteLine($"[delete-task] API DELETE /api/jobs/{{jobId}} succeeded job_id={jobId}");
                         await WriteJsonAsync(ctx, 200, Ok());
                         break;
                     }

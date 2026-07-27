@@ -36,6 +36,12 @@ type LoginState = { username?: string; state: string; prompt?: string; prompt_se
 type DownloadSeed = { kind: string; id: string; name?: string; install_dir?: string; installdir?: string; size_bytes?: number; size_text?: string } | null;
 type Tab = 'accounts' | 'download' | 'library' | 'jobs' | 'settings';
 
+function deleteDebug(message: string, data?: unknown, error = false) {
+  const payload = data === undefined ? '' : data;
+  if (error) console.error(`[SteamDl][delete-task] ${message}`, payload);
+  else console.log(`[SteamDl][delete-task] ${message}`, payload);
+}
+
 async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
   const options: RequestInit = body === undefined
     ? {}
@@ -334,32 +340,67 @@ function displayJobTitle(job: Job) {
 }
 
 function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: Job[]; activeJob: Job | null; setActiveJob: (job: Job | null) => void; refresh: () => Promise<void>; setToast: (s: string) => void }) {
+  const [jobMenu, setJobMenu] = useState<{ job: Job; x: number; y: number } | null>(null);
+  const longPressTimer = useRef<number | null>(null);
+  const longPressTriggered = useRef(false);
   async function load(job: Job) { setActiveJob(await api<Job>(`/api/jobs/${job.job_id}`)); }
   async function action(job: Job, name: 'cancel' | 'retry' | 'pause' | 'resume') {
     if (name === 'cancel' && !window.confirm('确定要取消当前下载任务吗？')) return;
     try { await api(`/api/jobs/${job.job_id}/${name}`, {}); await refresh(); if (activeJob?.job_id === job.job_id) await load(job); }
     catch (e: any) { setToast(e.message); }
   }
+  function clearLongPress() {
+    if (longPressTimer.current !== null) window.clearTimeout(longPressTimer.current);
+    longPressTimer.current = null;
+  }
+  function openJobMenu(job: Job, x: number, y: number) {
+    deleteDebug('打开单任务菜单', { job_id: job.job_id, title: displayJobTitle(job), x, y });
+    setJobMenu({ job, x, y });
+  }
   async function deleteJob(job: Job) {
-    if (!window.confirm(`确定要删除任务“${displayJobTitle(job)}”吗？`)) return;
+    deleteDebug('点击菜单删除任务', { job_id: job.job_id, title: displayJobTitle(job) });
+    setJobMenu(null);
+    if (!window.confirm(`确定要删除任务“${displayJobTitle(job)}”吗？`)) {
+      deleteDebug('用户取消删除任务确认', { job_id: job.job_id });
+      return;
+    }
     const deleteFiles = window.confirm('是否同时删除该任务已下载的文件？选择“取消”将只删除任务记录。');
+    deleteDebug('准备发送删除任务请求', { job_id: job.job_id, delete_files: deleteFiles, url: `/api/jobs/${job.job_id}` });
     try {
       await api(`/api/jobs/${job.job_id}`, { delete_files: deleteFiles }, 'DELETE');
+      deleteDebug('删除任务请求成功', { job_id: job.job_id, delete_files: deleteFiles });
       if (activeJob?.job_id === job.job_id) setActiveJob(null);
       await refresh();
+      deleteDebug('删除任务后刷新完成', { job_id: job.job_id });
       setToast(deleteFiles ? '任务和文件已删除' : '任务记录已删除');
-    } catch (e: any) { setToast(e.message); }
+    } catch (e: any) {
+      deleteDebug('删除任务请求失败', { job_id: job.job_id, message: e?.message || String(e) }, true);
+      setToast(e.message);
+    }
   }
   async function deleteAllJobs() {
-    if (jobs.length === 0) return;
-    if (!window.confirm(`确定要删除全部 ${jobs.length} 个任务记录吗？`)) return;
+    deleteDebug('点击删除全部任务', { count: jobs.length });
+    if (jobs.length === 0) {
+      deleteDebug('删除全部任务被忽略：任务列表为空');
+      return;
+    }
+    if (!window.confirm(`确定要删除全部 ${jobs.length} 个任务记录吗？`)) {
+      deleteDebug('用户取消删除全部任务确认', { count: jobs.length });
+      return;
+    }
     const deleteFiles = window.confirm('是否同时删除这些任务对应的下载文件？选择“取消”将只删除任务记录。');
+    deleteDebug('准备发送删除全部任务请求', { count: jobs.length, delete_files: deleteFiles, url: '/api/jobs' });
     try {
       await api('/api/jobs', { delete_files: deleteFiles }, 'DELETE');
+      deleteDebug('删除全部任务请求成功', { delete_files: deleteFiles });
       setActiveJob(null);
       await refresh();
+      deleteDebug('删除全部任务后刷新完成');
       setToast(deleteFiles ? '全部任务和文件已删除' : '全部任务记录已删除');
-    } catch (e: any) { setToast(e.message); }
+    } catch (e: any) {
+      deleteDebug('删除全部任务请求失败', { message: e?.message || String(e) }, true);
+      setToast(e.message);
+    }
   }
   async function sendInput() {
     if (!activeJob) return;
@@ -370,12 +411,38 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
   return <section className="grid two jobsPage">
     <div className="card">
       <div className="detailHead"><h3>任务历史</h3><button className="danger" disabled={jobs.length === 0} onClick={deleteAllJobs}>删除全部</button></div>
-      <div className="jobList">{jobs.map(job => <div className="jobRow" key={job.job_id}>
-        <button className="jobItem" onClick={() => load(job)}>
-          <span>{displayJobTitle(job)}</span><small>{stateText[job.state] || job.state} · {Math.round(job.percent || 0)}%</small>
-        </button>
-        <button className="danger compact" onClick={() => deleteJob(job)}>删除</button>
-      </div>)}</div>
+      <p className="muted hintText">右键或长按任务可删除单个任务。</p>
+      <div className="jobList">{jobs.map(job => <button className="jobItem" key={job.job_id} onClick={e => {
+        if (longPressTriggered.current) {
+          e.preventDefault();
+          longPressTriggered.current = false;
+          return;
+        }
+        load(job);
+      }} onContextMenu={e => {
+        e.preventDefault();
+        clearLongPress();
+        openJobMenu(job, e.clientX, e.clientY);
+      }} onPointerDown={e => {
+        if (e.pointerType === 'mouse') return;
+        clearLongPress();
+        longPressTriggered.current = false;
+        const x = e.clientX;
+        const y = e.clientY;
+        longPressTimer.current = window.setTimeout(() => {
+          longPressTriggered.current = true;
+          openJobMenu(job, x, y);
+        }, 560);
+      }} onPointerUp={clearLongPress} onPointerCancel={clearLongPress} onPointerLeave={clearLongPress}>
+        <span>{displayJobTitle(job)}</span><small>{stateText[job.state] || job.state} · {Math.round(job.percent || 0)}%</small>
+      </button>)}</div>
+      {jobMenu && <div className="contextBackdrop" onClick={() => setJobMenu(null)} onContextMenu={e => e.preventDefault()}>
+        <div className="contextMenu" style={{ left: `min(${jobMenu.x}px, calc(100vw - 220px))`, top: `min(${jobMenu.y}px, calc(100vh - 150px))` }} onClick={e => e.stopPropagation()}>
+          <p>{displayJobTitle(jobMenu.job)}</p>
+          <button className="danger block" onClick={() => deleteJob(jobMenu.job)}>删除任务</button>
+          <button className="ghost block" onClick={() => setJobMenu(null)}>取消</button>
+        </div>
+      </div>}
     </div>
     <div className="card detail">
       {!activeJob ? <p className="muted">选择一个任务查看详情</p> : <>
@@ -389,7 +456,6 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
           {activeJob.state === 'paused' && <button className="primary" onClick={() => action(activeJob, 'resume')}>继续</button>}
           <button className="danger" onClick={() => action(activeJob, 'cancel')}>取消</button>
           <button onClick={() => action(activeJob, 'retry')}>重试</button>
-          <button className="danger" onClick={() => deleteJob(activeJob)}>删除任务</button>
         </div>
       </>}
     </div>
@@ -399,7 +465,6 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
 function LibraryPage({ selectedAccount, jobs, setToast, openDownload }: { selectedAccount: string; jobs: Job[]; setToast: (s: string) => void; openDownload: (seed: DownloadSeed) => void }) {
   const [games, setGames] = useState<LibraryGame[]>([]);
   const [message, setMessage] = useState('');
-  const [manualId, setManualId] = useState('');
   const [query, setQuery] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState({ scanned: 0, total: 0, percent: 0, state: 'idle', mode: 'full' });
@@ -407,6 +472,7 @@ function LibraryPage({ selectedAccount, jobs, setToast, openDownload }: { select
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [downloadFilter, setDownloadFilter] = useState<'all' | 'downloaded' | 'undownloaded'>('all');
+  const [filterOpen, setFilterOpen] = useState(false);
   const jobByAppId = useMemo(() => {
     const map = new Map<string, Job>();
     for (const job of jobs) {
@@ -497,8 +563,16 @@ function LibraryPage({ selectedAccount, jobs, setToast, openDownload }: { select
     <div className="card span2">
       <h3>游戏库</h3>
       <p className="muted">当前账号：{selectedAccount}。首次增量同步会自动按全量执行；后续增量同步仅检查新增候选应用。</p>
-      <div className="row"><button disabled={syncing} onClick={() => sync('incremental')}>{syncing ? '同步中…' : '增量同步'}</button><button disabled={syncing} onClick={() => sync('full')}>全量同步</button><input value={manualId} onChange={e => setManualId(e.target.value)} placeholder="输入 AppID，例如 730" /><button disabled={!manualId.trim()} onClick={() => openDownload({ kind: 'app', id: manualId.trim() })}>下载此 AppID</button></div>
-      <div className="libraryControls"><input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" /><select value={downloadFilter} onChange={e => setDownloadFilter(e.target.value as 'all' | 'downloaded' | 'undownloaded')}><option value="all">全部游戏</option><option value="downloaded">已下载</option><option value="undownloaded">未下载</option></select><select value={sortBy} onChange={e => setSortBy(e.target.value as 'name' | 'app_id')}><option value="name">按名称排序</option><option value="app_id">按 AppID 排序</option></select><select value={sortDir} onChange={e => setSortDir(e.target.value as 'asc' | 'desc')}><option value="asc">升序</option><option value="desc">降序</option></select><select value={viewMode} onChange={e => setViewMode(e.target.value as 'grid' | 'list')}><option value="grid">大图显示</option><option value="list">列表显示</option></select></div>
+      <div className="row"><button disabled={syncing} onClick={() => sync('incremental')}>{syncing ? '同步中…' : '增量同步'}</button><button disabled={syncing} onClick={() => sync('full')}>全量同步</button></div>
+      <div className="libraryToolbar">
+        <div className="searchWithFilter"><input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" /><button className={`iconButton filterToggle ${filterOpen ? 'active' : ''}`} title="筛选和排序" aria-label="筛选和排序" onClick={() => setFilterOpen(v => !v)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg></button></div>
+        {filterOpen && <div className="filterPanel">
+          <label>下载状态<select value={downloadFilter} onChange={e => setDownloadFilter(e.target.value as 'all' | 'downloaded' | 'undownloaded')}><option value="all">全部游戏</option><option value="downloaded">已下载</option><option value="undownloaded">未下载</option></select></label>
+          <label>排序方式<select value={sortBy} onChange={e => setSortBy(e.target.value as 'name' | 'app_id')}><option value="name">按名称排序</option><option value="app_id">按 AppID 排序</option></select></label>
+          <label>排序方向<select value={sortDir} onChange={e => setSortDir(e.target.value as 'asc' | 'desc')}><option value="asc">升序</option><option value="desc">降序</option></select></label>
+          <label>展示方式<select value={viewMode} onChange={e => setViewMode(e.target.value as 'grid' | 'list')}><option value="grid">大图显示</option><option value="list">列表显示</option></select></label>
+        </div>}
+      </div>
       {message && <p className="muted">{message}</p>}
       {(syncing || progress.total > 0) && <>
         <div className="bar" title="已检查候选应用 / 候选应用总数"><i style={{ width: `${progress.percent || 0}%` }} /></div>
