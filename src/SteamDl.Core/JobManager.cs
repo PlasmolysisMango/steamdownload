@@ -388,6 +388,98 @@ namespace SteamDl.Core
             return _store.ToJson(job, includeLog: true);
         }
 
+        public bool DeleteJob(string jobId, bool deleteFiles, out string error)
+        {
+            error = null;
+            JobRecord job;
+            lock (_sync)
+            {
+                job = _store.GetJob(jobId);
+                if (job == null)
+                {
+                    error = "任务不存在";
+                    return false;
+                }
+
+                if (jobId == _currentJobId && _busy)
+                {
+                    error = "任务运行中，请先取消或暂停后再删除";
+                    return false;
+                }
+
+                if (!_store.DeleteJob(jobId))
+                {
+                    error = "任务不存在";
+                    return false;
+                }
+
+                if (_currentJobId == jobId) _currentJobId = null;
+            }
+
+            if (deleteFiles && !TryDeleteOutputDir(job.OutputDir, out error)) return false;
+            return true;
+        }
+
+        public bool DeleteAllJobs(bool deleteFiles, out string error)
+        {
+            error = null;
+            List<JobRecord> jobs;
+            lock (_sync)
+            {
+                if (_busy)
+                {
+                    error = "任务运行中，请先取消或暂停后再删除全部任务";
+                    return false;
+                }
+
+                jobs = _store.ListJobs(limit: int.MaxValue);
+                _store.DeleteAllJobs();
+                _currentJobId = null;
+            }
+
+            if (!deleteFiles) return true;
+            foreach (var dir in jobs.Select(x => x.OutputDir).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!TryDeleteOutputDir(dir, out error)) return false;
+            }
+            return true;
+        }
+
+        static bool TryDeleteOutputDir(string outputDir, out string error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(outputDir)) return true;
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(outputDir);
+            }
+            catch (Exception ex)
+            {
+                error = "输出目录无效: " + ex.Message;
+                return false;
+            }
+
+            var root = Path.GetPathRoot(fullPath);
+            if (string.IsNullOrWhiteSpace(root) || string.Equals(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            {
+                error = "拒绝删除磁盘根目录";
+                return false;
+            }
+
+            if (!Directory.Exists(fullPath)) return true;
+            try
+            {
+                Directory.Delete(fullPath, recursive: true);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "删除文件失败: " + ex.Message;
+                return false;
+            }
+        }
+
         public List<string> Accounts()
         {
             EnsureAccountStoreLoaded();

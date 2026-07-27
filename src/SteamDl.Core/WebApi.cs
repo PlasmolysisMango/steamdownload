@@ -183,6 +183,19 @@ namespace SteamDl.Core
                         break;
                     }
 
+                    case ("DELETE", "/api/jobs"):
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var deleteFiles = body?["delete_files"]?.GetValue<bool>() == true;
+                        if (!JobManager.Instance.DeleteAllJobs(deleteFiles, out var deleteAllError))
+                        {
+                            await WriteJsonAsync(ctx, 409, Error(deleteAllError));
+                            break;
+                        }
+                        await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+                    }
+
                     case ("POST", "/api/jobs"):
                     case ("POST", "/api/download"):
                     {
@@ -207,6 +220,19 @@ namespace SteamDl.Core
                         }
 
                         await WriteJsonAsync(ctx, 200, job);
+                        break;
+                    }
+
+                    case ("DELETE", _) when IsJobPath(path, out var jobId, out var action) && action == null:
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var deleteFiles = body?["delete_files"]?.GetValue<bool>() == true;
+                        if (!JobManager.Instance.DeleteJob(jobId, deleteFiles, out var deleteError))
+                        {
+                            await WriteJsonAsync(ctx, deleteError == "任务不存在" ? 404 : 409, Error(deleteError));
+                            break;
+                        }
+                        await WriteJsonAsync(ctx, 200, Ok());
                         break;
                     }
 

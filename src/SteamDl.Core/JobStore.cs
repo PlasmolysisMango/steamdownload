@@ -248,6 +248,51 @@ VALUES ($job_id, $kind, $item_id, $name, $username, $anonymous, $platform_os, $d
             }
         }
 
+        public bool DeleteJob(string jobId)
+        {
+            if (string.IsNullOrWhiteSpace(jobId)) return false;
+            lock (_sync)
+            {
+                using var conn = OpenConnection();
+                using var tx = conn.BeginTransaction();
+                using (var deleteLogs = conn.CreateCommand())
+                {
+                    deleteLogs.Transaction = tx;
+                    deleteLogs.CommandText = "DELETE FROM job_logs WHERE job_id = $job_id";
+                    Add(deleteLogs, "$job_id", jobId);
+                    deleteLogs.ExecuteNonQuery();
+                }
+                using var cmd = conn.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = "DELETE FROM jobs WHERE job_id = $job_id";
+                Add(cmd, "$job_id", jobId);
+                var deleted = cmd.ExecuteNonQuery() > 0;
+                tx.Commit();
+                return deleted;
+            }
+        }
+
+        public int DeleteAllJobs()
+        {
+            lock (_sync)
+            {
+                using var conn = OpenConnection();
+                using var tx = conn.BeginTransaction();
+                using (var deleteLogs = conn.CreateCommand())
+                {
+                    deleteLogs.Transaction = tx;
+                    deleteLogs.CommandText = "DELETE FROM job_logs";
+                    deleteLogs.ExecuteNonQuery();
+                }
+                using var cmd = conn.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = "DELETE FROM jobs";
+                var deleted = cmd.ExecuteNonQuery();
+                tx.Commit();
+                return deleted;
+            }
+        }
+
         public List<JobRecord> GetRecoverableJobs()
         {
             lock (_sync)

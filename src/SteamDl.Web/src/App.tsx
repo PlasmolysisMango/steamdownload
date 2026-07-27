@@ -340,6 +340,27 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
     try { await api(`/api/jobs/${job.job_id}/${name}`, {}); await refresh(); if (activeJob?.job_id === job.job_id) await load(job); }
     catch (e: any) { setToast(e.message); }
   }
+  async function deleteJob(job: Job) {
+    if (!window.confirm(`确定要删除任务“${displayJobTitle(job)}”吗？`)) return;
+    const deleteFiles = window.confirm('是否同时删除该任务已下载的文件？选择“取消”将只删除任务记录。');
+    try {
+      await api(`/api/jobs/${job.job_id}`, { delete_files: deleteFiles }, 'DELETE');
+      if (activeJob?.job_id === job.job_id) setActiveJob(null);
+      await refresh();
+      setToast(deleteFiles ? '任务和文件已删除' : '任务记录已删除');
+    } catch (e: any) { setToast(e.message); }
+  }
+  async function deleteAllJobs() {
+    if (jobs.length === 0) return;
+    if (!window.confirm(`确定要删除全部 ${jobs.length} 个任务记录吗？`)) return;
+    const deleteFiles = window.confirm('是否同时删除这些任务对应的下载文件？选择“取消”将只删除任务记录。');
+    try {
+      await api('/api/jobs', { delete_files: deleteFiles }, 'DELETE');
+      setActiveJob(null);
+      await refresh();
+      setToast(deleteFiles ? '全部任务和文件已删除' : '全部任务记录已删除');
+    } catch (e: any) { setToast(e.message); }
+  }
   async function sendInput() {
     if (!activeJob) return;
     const input = document.querySelector<HTMLInputElement>('#jobInput')?.value || '';
@@ -348,10 +369,13 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
   }
   return <section className="grid two jobsPage">
     <div className="card">
-      <h3>任务历史</h3>
-      <div className="jobList">{jobs.map(job => <button key={job.job_id} className="jobItem" onClick={() => load(job)}>
-        <span>{displayJobTitle(job)}</span><small>{stateText[job.state] || job.state} · {Math.round(job.percent || 0)}%</small>
-      </button>)}</div>
+      <div className="detailHead"><h3>任务历史</h3><button className="danger" disabled={jobs.length === 0} onClick={deleteAllJobs}>删除全部</button></div>
+      <div className="jobList">{jobs.map(job => <div className="jobRow" key={job.job_id}>
+        <button className="jobItem" onClick={() => load(job)}>
+          <span>{displayJobTitle(job)}</span><small>{stateText[job.state] || job.state} · {Math.round(job.percent || 0)}%</small>
+        </button>
+        <button className="danger compact" onClick={() => deleteJob(job)}>删除</button>
+      </div>)}</div>
     </div>
     <div className="card detail">
       {!activeJob ? <p className="muted">选择一个任务查看详情</p> : <>
@@ -365,6 +389,7 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
           {activeJob.state === 'paused' && <button className="primary" onClick={() => action(activeJob, 'resume')}>继续</button>}
           <button className="danger" onClick={() => action(activeJob, 'cancel')}>取消</button>
           <button onClick={() => action(activeJob, 'retry')}>重试</button>
+          <button className="danger" onClick={() => deleteJob(activeJob)}>删除任务</button>
         </div>
       </>}
     </div>
@@ -381,14 +406,7 @@ function LibraryPage({ selectedAccount, jobs, setToast, openDownload }: { select
   const [sortBy, setSortBy] = useState<'name' | 'app_id'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const visibleGames = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const filtered = q ? games.filter(g => g.app_id.includes(q) || g.name.toLowerCase().includes(q)) : games;
-    return [...filtered].sort((a, b) => {
-      const value = sortBy === 'app_id' ? Number(a.app_id) - Number(b.app_id) : a.name.localeCompare(b.name, 'zh-Hans');
-      return sortDir === 'asc' ? value : -value;
-    });
-  }, [games, query, sortBy, sortDir]);
+  const [downloadFilter, setDownloadFilter] = useState<'all' | 'downloaded' | 'undownloaded'>('all');
   const jobByAppId = useMemo(() => {
     const map = new Map<string, Job>();
     for (const job of jobs) {
@@ -401,6 +419,21 @@ function LibraryPage({ selectedAccount, jobs, setToast, openDownload }: { select
     }
     return map;
   }, [jobs, selectedAccount]);
+  const visibleGames = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = games.filter(g => {
+      if (q && !g.app_id.includes(q) && !g.name.toLowerCase().includes(q)) return false;
+      const job = jobByAppId.get(g.app_id);
+      const downloaded = !!(g.is_downloaded || job?.downloaded || job?.state === 'done');
+      if (downloadFilter === 'downloaded') return downloaded;
+      if (downloadFilter === 'undownloaded') return !downloaded;
+      return true;
+    });
+    return [...filtered].sort((a, b) => {
+      const value = sortBy === 'app_id' ? Number(a.app_id) - Number(b.app_id) : a.name.localeCompare(b.name, 'zh-Hans');
+      return sortDir === 'asc' ? value : -value;
+    });
+  }, [games, query, sortBy, sortDir, downloadFilter, jobByAppId]);
   function applyLibraryStatus(res: any) {
     const items = Array.isArray(res.items) ? res.items : [];
     const nextGames = items.map((x: any) => ({ app_id: String(x.app_id || x.id), name: x.name || `App ${x.app_id || x.id}`, header_image: x.header_image, install_dir: x.install_dir || x.installdir, installdir: x.installdir || x.install_dir, size_bytes: Number(x.size_bytes || 0), size_text: x.size_text, is_downloaded: !!x.is_downloaded, downloaded_at: x.downloaded_at || '' }));
@@ -453,19 +486,26 @@ function LibraryPage({ selectedAccount, jobs, setToast, openDownload }: { select
     finally { setSyncing(false); }
   }
   const modeText = progress.mode === 'incremental' ? '增量同步' : '全量同步';
+  const emptyLibraryText = query.trim()
+    ? '当前搜索没有匹配的游戏。清空搜索框可查看已同步的全部游戏。'
+    : downloadFilter === 'downloaded'
+      ? '当前没有匹配的已下载游戏。'
+      : downloadFilter === 'undownloaded'
+        ? '当前没有匹配的未下载游戏。'
+        : '当前筛选没有匹配的游戏。';
   return <section className="grid two">
     <div className="card span2">
       <h3>游戏库</h3>
       <p className="muted">当前账号：{selectedAccount}。首次增量同步会自动按全量执行；后续增量同步仅检查新增候选应用。</p>
       <div className="row"><button disabled={syncing} onClick={() => sync('incremental')}>{syncing ? '同步中…' : '增量同步'}</button><button disabled={syncing} onClick={() => sync('full')}>全量同步</button><input value={manualId} onChange={e => setManualId(e.target.value)} placeholder="输入 AppID，例如 730" /><button disabled={!manualId.trim()} onClick={() => openDownload({ kind: 'app', id: manualId.trim() })}>下载此 AppID</button></div>
-      <div className="libraryControls"><input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" /><select value={sortBy} onChange={e => setSortBy(e.target.value as 'name' | 'app_id')}><option value="name">按名称排序</option><option value="app_id">按 AppID 排序</option></select><select value={sortDir} onChange={e => setSortDir(e.target.value as 'asc' | 'desc')}><option value="asc">升序</option><option value="desc">降序</option></select><select value={viewMode} onChange={e => setViewMode(e.target.value as 'grid' | 'list')}><option value="grid">大图显示</option><option value="list">列表显示</option></select></div>
+      <div className="libraryControls"><input className="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索游戏名或 AppID" /><select value={downloadFilter} onChange={e => setDownloadFilter(e.target.value as 'all' | 'downloaded' | 'undownloaded')}><option value="all">全部游戏</option><option value="downloaded">已下载</option><option value="undownloaded">未下载</option></select><select value={sortBy} onChange={e => setSortBy(e.target.value as 'name' | 'app_id')}><option value="name">按名称排序</option><option value="app_id">按 AppID 排序</option></select><select value={sortDir} onChange={e => setSortDir(e.target.value as 'asc' | 'desc')}><option value="asc">升序</option><option value="desc">降序</option></select><select value={viewMode} onChange={e => setViewMode(e.target.value as 'grid' | 'list')}><option value="grid">大图显示</option><option value="list">列表显示</option></select></div>
       {message && <p className="muted">{message}</p>}
       {(syncing || progress.total > 0) && <>
         <div className="bar" title="已检查候选应用 / 候选应用总数"><i style={{ width: `${progress.percent || 0}%` }} /></div>
         <p className="muted">{modeText}进度：已检查候选应用 {progress.scanned}/{progress.total || '?'} · 已显示 {games.length} 个游戏</p>
       </>}
     </div>
-    {games.length === 0 ? <div className="card span2"><p className="muted">{message || '尚未同步游戏库。点击“增量同步”会在首次自动全量读取当前账号拥有的游戏。'}</p></div> : visibleGames.length === 0 ? <div className="card span2"><p className="muted">当前搜索没有匹配的游戏。清空搜索框可查看已同步的全部游戏。</p></div> : <div className={`libraryResults span2 ${viewMode === 'list' ? 'list' : 'grid'}`}>{visibleGames.map(game => {
+    {games.length === 0 ? <div className="card span2"><p className="muted">{message || '尚未同步游戏库。点击“增量同步”会在首次自动全量读取当前账号拥有的游戏。'}</p></div> : visibleGames.length === 0 ? <div className="card span2"><p className="muted">{emptyLibraryText}</p></div> : <div className={`libraryResults span2 ${viewMode === 'list' ? 'list' : 'grid'}`}>{visibleGames.map(game => {
       const job = jobByAppId.get(game.app_id);
       const downloading = !!job && ['queued', 'starting', 'running', 'waiting_input', 'paused'].includes(job.state);
       const downloaded = game.is_downloaded || job?.downloaded || job?.state === 'done';
