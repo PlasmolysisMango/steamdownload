@@ -94,6 +94,13 @@ namespace SteamDl.Core
                                  label.Contains("密码");
                     if (!string.IsNullOrWhiteSpace(_currentJobId))
                     {
+                        var job = _store.GetJob(_currentJobId);
+                        if (_pauseRequested || _cancelRequested || job?.State is "paused" or "cancelled")
+                        {
+                            _store.AddLog(_currentJobId, "已请求暂停/取消，忽略后续输入提示。", MaxLogLines);
+                            Task.Run(() => relay.SupplyInput(string.Empty));
+                            return;
+                        }
                         _store.UpdateState(_currentJobId, "waiting_input", prompt: label, promptSecret: secret);
                         return;
                     }
@@ -128,6 +135,10 @@ namespace SteamDl.Core
                     if (!string.IsNullOrWhiteSpace(_currentJobId))
                     {
                         var job = _store.GetJob(_currentJobId);
+                        if (_pauseRequested || _cancelRequested || job?.State is "paused" or "cancelled")
+                        {
+                            return;
+                        }
                         if (job?.State == "waiting_input")
                         {
                             _store.AddLog(_currentJobId, job.Prompt + " ******", MaxLogLines);
@@ -428,11 +439,9 @@ namespace SteamDl.Core
                     return false;
                 }
 
-                if (jobId == _currentJobId && _busy)
+                if (jobId == _currentJobId)
                 {
-                    error = "任务运行中，请先取消或暂停后再删除";
-                    Console.WriteLine($"[delete-task] JobManager.DeleteJob failed job_id={jobId} reason=busy current_job_id={_currentJobId}");
-                    return false;
+                    StopCurrentJobForDeletionLocked(jobId);
                 }
 
                 Console.WriteLine($"[delete-task] JobManager.DeleteJob deleting database record job_id={jobId} title={job.Name} output_dir={job.OutputDir}");
@@ -468,11 +477,9 @@ namespace SteamDl.Core
             List<JobRecord> jobs;
             lock (_sync)
             {
-                if (_busy)
+                if (!string.IsNullOrWhiteSpace(_currentJobId))
                 {
-                    error = "任务运行中，请先取消或暂停后再删除全部任务";
-                    Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs failed reason=busy current_job_id={_currentJobId}");
-                    return false;
+                    StopCurrentJobForDeletionLocked(_currentJobId);
                 }
 
                 jobs = _store.ListJobs(limit: int.MaxValue);
@@ -499,6 +506,18 @@ namespace SteamDl.Core
             }
             Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs succeeded count={jobs.Count} delete_files=True");
             return true;
+        }
+
+        void StopCurrentJobForDeletionLocked(string jobId)
+        {
+            if (string.IsNullOrWhiteSpace(jobId) || jobId != _currentJobId) return;
+            Console.WriteLine($"[delete-task] stopping current job before delete job_id={jobId}");
+            _cancelRequested = true;
+            _pauseRequested = false;
+            ConsoleRelay.Instance.SupplyInput(string.Empty);
+            Task.Run(ContentDownloader.ShutdownSteam3);
+            _currentJobId = null;
+            _busy = false;
         }
 
         void ClearLibraryDownloaded(JobRecord job)
