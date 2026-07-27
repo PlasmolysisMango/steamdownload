@@ -150,6 +150,9 @@ namespace SteamDl.Core
                 lock (_sync)
                 {
                     if (total <= 0 || string.IsNullOrWhiteSpace(_currentJobId)) return;
+                    if (_pauseRequested || _cancelRequested) return;
+                    var job = _store.GetJob(_currentJobId);
+                    if (job?.State is "paused" or "cancelled") return;
                     var percent = Math.Min(100.0, downloaded * 100.0 / total);
                     var text = $"{FormatBytes(downloaded)} / {FormatBytes(total)}  ({percent:0.0}%)";
                     _store.UpdateState(_currentJobId, "running", percent: percent, progressText: text);
@@ -253,6 +256,28 @@ namespace SteamDl.Core
             _store.UpdateState(job.JobId, "starting", percent: resetProgress ? 0 : null, progressText: resetProgress ? "" : null, error: "", prompt: "", promptSecret: false);
             ConsoleRelay.Instance.DrainPendingInput();
             Task.Run(() => RunAsync(job.JobId));
+        }
+
+        bool IsPauseRequested(string jobId)
+        {
+            lock (_sync)
+            {
+                return jobId == _currentJobId && _pauseRequested;
+            }
+        }
+
+        bool IsCancelRequested(string jobId)
+        {
+            lock (_sync)
+            {
+                return jobId == _currentJobId && _cancelRequested;
+            }
+        }
+
+        void ThrowIfPauseOrCancelRequested(string jobId)
+        {
+            if (IsPauseRequested(jobId)) throw new OperationCanceledException("任务已暂停");
+            if (IsCancelRequested(jobId)) throw new OperationCanceledException("任务已取消");
         }
 
         public bool SupplyInput(string answer) => SupplyInput(_currentJobId, answer);
@@ -419,8 +444,10 @@ namespace SteamDl.Core
                 }
 
                 if (_currentJobId == jobId) _currentJobId = null;
+                ClearLibraryDownloadedLocked(job);
             }
 
+            ClearLibraryDownloaded(job);
             if (deleteFiles)
             {
                 Console.WriteLine($"[delete-task] JobManager.DeleteJob deleting files job_id={jobId} output_dir={job.OutputDir}");
@@ -451,9 +478,11 @@ namespace SteamDl.Core
                 jobs = _store.ListJobs(limit: int.MaxValue);
                 Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs deleting database records count={jobs.Count}");
                 _store.DeleteAllJobs();
+                foreach (var job in jobs) ClearLibraryDownloadedLocked(job);
                 _currentJobId = null;
             }
 
+            foreach (var job in jobs) ClearLibraryDownloaded(job);
             if (!deleteFiles)
             {
                 Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs succeeded count={jobs.Count} delete_files=False");
@@ -470,6 +499,23 @@ namespace SteamDl.Core
             }
             Console.WriteLine($"[delete-task] JobManager.DeleteAllJobs succeeded count={jobs.Count} delete_files=True");
             return true;
+        }
+
+        void ClearLibraryDownloaded(JobRecord job)
+        {
+            if (job?.Kind != "app" || string.IsNullOrWhiteSpace(job.Username) || !uint.TryParse(job.ItemId, out var appId)) return;
+            _store.ClearLibraryDownloaded(job.Username, appId);
+            Console.WriteLine($"[delete-task] cleared library downloaded flag username={job.Username} app_id={appId}");
+        }
+
+        void ClearLibraryDownloadedLocked(JobRecord job)
+        {
+            if (job?.Kind != "app" || string.IsNullOrWhiteSpace(job.Username) || !uint.TryParse(job.ItemId, out var appId)) return;
+            if (!string.Equals(_librarySync.Username, job.Username.Trim(), StringComparison.OrdinalIgnoreCase)) return;
+            var item = _librarySync.Items.FirstOrDefault(x => x.AppId == appId);
+            if (item == null) return;
+            item.IsDownloaded = false;
+            item.DownloadedAt = "";
         }
 
         static bool TryDeleteOutputDir(string outputDir, out string error)
@@ -1126,11 +1172,13 @@ namespace SteamDl.Core
 
             try
             {
+                ThrowIfPauseOrCancelRequested(jobId);
                 _store.UpdateState(jobId, "running", prompt: "", promptSecret: false, error: "");
 
                 EnsureAccountStoreLoaded();
                 Directory.CreateDirectory(job.OutputDir);
                 ConfigureDownloader(request, job.OutputDir);
+                ThrowIfPauseOrCancelRequested(jobId);
 
                 var username = request.Anonymous || string.IsNullOrWhiteSpace(request.Username)
                     ? null
@@ -1143,6 +1191,7 @@ namespace SteamDl.Core
                 }
 
                 AppendLog(username == null ? "使用匿名账户登录(仅限免费内容)…" : $"登录账户 {username}…");
+                ThrowIfPauseOrCancelRequested(jobId);
 
                 if (!ContentDownloader.InitializeSteam3(username, password))
                 {
@@ -1159,8 +1208,11 @@ namespace SteamDl.Core
                     {
                         var pubFileId = ulong.Parse(request.Id);
                         AppendLog("解析创意工坊物品所属 App…");
+                        ThrowIfPauseOrCancelRequested(jobId);
                         var appId = await AppInfoService.ResolveWorkshopAppIdAsync(pubFileId).ConfigureAwait(false);
+                        ThrowIfPauseOrCancelRequested(jobId);
                         AppendLog($"物品属于 App {appId},开始下载…");
+                        ThrowIfPauseOrCancelRequested(jobId);
                         await ContentDownloader.DownloadPubfileAsync(appId, pubFileId).ConfigureAwait(false);
                     }
                     else
@@ -1173,6 +1225,7 @@ namespace SteamDl.Core
                         }
 
                         var os = request.Os == "any" ? null : request.Os;
+                        ThrowIfPauseOrCancelRequested(jobId);
                         await ContentDownloader.DownloadAppAsync(
                             appId, depots, ContentDownloader.DEFAULT_BRANCH,
                             os, null, null, false, false).ConfigureAwait(false);
@@ -1200,7 +1253,7 @@ namespace SteamDl.Core
             }
             catch (OperationCanceledException)
             {
-                _store.UpdateState(jobId, _pauseRequested ? "paused" : "cancelled");
+                _store.UpdateState(jobId, IsPauseRequested(jobId) ? "paused" : "cancelled");
             }
             catch (Exception ex)
             {

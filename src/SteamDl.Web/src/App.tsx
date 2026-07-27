@@ -88,6 +88,8 @@ export function App() {
   const [serviceOnline, setServiceOnline] = useState(true);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const autoLibrarySyncRef = useRef('');
+  const loginFlowAccountRef = useRef('');
+  const fullLibrarySyncRef = useRef('');
 
   function setSelectedAccount(username: string) {
     const next = username.trim();
@@ -106,9 +108,21 @@ export function App() {
     setJobs(jobsRes.jobs);
     setAccounts(accountsRes.accounts);
     setAccountDetails(accountsRes.account_details || []);
-    setLoginState(accountsRes.login || { state: 'idle' });
-    if (accountsRes.login?.state === 'done' && accountsRes.login.username && accountsRes.accounts.includes(accountsRes.login.username)) {
-      setSelectedAccount(accountsRes.login.username);
+    const nextLogin = accountsRes.login || { state: 'idle' };
+    setLoginState(nextLogin);
+    if ((nextLogin.state === 'running' || nextLogin.state === 'waiting_input') && nextLogin.username) {
+      loginFlowAccountRef.current = nextLogin.username.trim();
+    }
+    if (nextLogin.state === 'error') loginFlowAccountRef.current = '';
+    if (nextLogin.state === 'done' && nextLogin.username && accountsRes.accounts.includes(nextLogin.username)) {
+      const username = nextLogin.username.trim();
+      setSelectedAccount(username);
+      if (loginFlowAccountRef.current === username && fullLibrarySyncRef.current !== username) {
+        fullLibrarySyncRef.current = username;
+        autoLibrarySyncRef.current = username;
+        api('/api/library/sync', { username, mode: 'full', force_full_sync: true }).catch(() => {});
+        loginFlowAccountRef.current = '';
+      }
     }
     setSettings(settingsRes);
     if (configRes) setConfig(configRes);
@@ -132,6 +146,12 @@ export function App() {
   useEffect(() => {
     if (loginState.state === 'done') setToast('');
   }, [loginState.state]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(''), 5000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     if (!selectedAccount || !accounts.includes(selectedAccount)) { autoLibrarySyncRef.current = ''; return; }
@@ -341,6 +361,7 @@ function displayJobTitle(job: Job) {
 
 function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: Job[]; activeJob: Job | null; setActiveJob: (job: Job | null) => void; refresh: () => Promise<void>; setToast: (s: string) => void }) {
   const [jobMenu, setJobMenu] = useState<{ job: Job; x: number; y: number } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ mode: 'single' | 'all'; job?: Job } | null>(null);
   const longPressTimer = useRef<number | null>(null);
   const longPressTriggered = useRef(false);
   async function load(job: Job) { setActiveJob(await api<Job>(`/api/jobs/${job.job_id}`)); }
@@ -357,44 +378,48 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
     deleteDebug('打开单任务菜单', { job_id: job.job_id, title: displayJobTitle(job), x, y });
     setJobMenu({ job, x, y });
   }
-  async function deleteJob(job: Job) {
-    deleteDebug('点击菜单删除任务', { job_id: job.job_id, title: displayJobTitle(job) });
+  function requestDeleteJob(job: Job) {
+    deleteDebug('点击菜单删除任务，打开前端确认弹层', { job_id: job.job_id, title: displayJobTitle(job) });
     setJobMenu(null);
-    if (!window.confirm(`确定要删除任务“${displayJobTitle(job)}”吗？`)) {
-      deleteDebug('用户取消删除任务确认', { job_id: job.job_id });
-      return;
-    }
-    const deleteFiles = window.confirm('是否同时删除该任务已下载的文件？选择“取消”将只删除任务记录。');
-    deleteDebug('准备发送删除任务请求', { job_id: job.job_id, delete_files: deleteFiles, url: `/api/jobs/${job.job_id}` });
-    try {
-      await api(`/api/jobs/${job.job_id}`, { delete_files: deleteFiles }, 'DELETE');
-      deleteDebug('删除任务请求成功', { job_id: job.job_id, delete_files: deleteFiles });
-      if (activeJob?.job_id === job.job_id) setActiveJob(null);
-      await refresh();
-      deleteDebug('删除任务后刷新完成', { job_id: job.job_id });
-      setToast(deleteFiles ? '任务和文件已删除' : '任务记录已删除');
-    } catch (e: any) {
-      deleteDebug('删除任务请求失败', { job_id: job.job_id, message: e?.message || String(e) }, true);
-      setToast(e.message);
-    }
+    setDeleteConfirm({ mode: 'single', job });
   }
-  async function deleteAllJobs() {
-    deleteDebug('点击删除全部任务', { count: jobs.length });
+  function requestDeleteAllJobs() {
+    deleteDebug('点击删除全部任务，打开前端确认弹层', { count: jobs.length });
     if (jobs.length === 0) {
       deleteDebug('删除全部任务被忽略：任务列表为空');
       return;
     }
-    if (!window.confirm(`确定要删除全部 ${jobs.length} 个任务记录吗？`)) {
-      deleteDebug('用户取消删除全部任务确认', { count: jobs.length });
+    setDeleteConfirm({ mode: 'all' });
+  }
+  async function executeDelete(deleteFiles: boolean) {
+    const target = deleteConfirm;
+    if (!target) return;
+    setDeleteConfirm(null);
+    if (target.mode === 'single' && target.job) {
+      const job = target.job;
+      deleteDebug('准备发送删除任务请求', { job_id: job.job_id, delete_files: deleteFiles, url: `/api/jobs/${job.job_id}` });
+      try {
+        await api(`/api/jobs/${job.job_id}`, { delete_files: deleteFiles }, 'DELETE');
+        deleteDebug('删除任务请求成功', { job_id: job.job_id, delete_files: deleteFiles });
+        if (activeJob?.job_id === job.job_id) setActiveJob(null);
+        await refresh();
+        window.dispatchEvent(new Event('steamdl-library-refresh'));
+        deleteDebug('删除任务后刷新完成', { job_id: job.job_id });
+        setToast(deleteFiles ? '任务和文件已删除' : '任务记录已删除');
+      } catch (e: any) {
+        deleteDebug('删除任务请求失败', { job_id: job.job_id, message: e?.message || String(e) }, true);
+        setToast(e.message);
+      }
       return;
     }
-    const deleteFiles = window.confirm('是否同时删除这些任务对应的下载文件？选择“取消”将只删除任务记录。');
+
     deleteDebug('准备发送删除全部任务请求', { count: jobs.length, delete_files: deleteFiles, url: '/api/jobs' });
     try {
       await api('/api/jobs', { delete_files: deleteFiles }, 'DELETE');
       deleteDebug('删除全部任务请求成功', { delete_files: deleteFiles });
       setActiveJob(null);
       await refresh();
+      window.dispatchEvent(new Event('steamdl-library-refresh'));
       deleteDebug('删除全部任务后刷新完成');
       setToast(deleteFiles ? '全部任务和文件已删除' : '全部任务记录已删除');
     } catch (e: any) {
@@ -410,7 +435,7 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
   }
   return <section className="grid two jobsPage">
     <div className="card">
-      <div className="detailHead"><h3>任务历史</h3><button className="danger" disabled={jobs.length === 0} onClick={deleteAllJobs}>删除全部</button></div>
+      <div className="detailHead"><h3>任务历史</h3><button className="danger" disabled={jobs.length === 0} onClick={requestDeleteAllJobs}>删除全部</button></div>
       <p className="muted hintText">右键或长按任务可删除单个任务。</p>
       <div className="jobList">{jobs.map(job => <button className="jobItem" key={job.job_id} onClick={e => {
         if (longPressTriggered.current) {
@@ -439,8 +464,20 @@ function JobsPage({ jobs, activeJob, setActiveJob, refresh, setToast }: { jobs: 
       {jobMenu && <div className="contextBackdrop" onClick={() => setJobMenu(null)} onContextMenu={e => e.preventDefault()}>
         <div className="contextMenu" style={{ left: `min(${jobMenu.x}px, calc(100vw - 220px))`, top: `min(${jobMenu.y}px, calc(100vh - 150px))` }} onClick={e => e.stopPropagation()}>
           <p>{displayJobTitle(jobMenu.job)}</p>
-          <button className="danger block" onClick={() => deleteJob(jobMenu.job)}>删除任务</button>
+          <button className="danger block" onClick={() => requestDeleteJob(jobMenu.job)}>删除任务</button>
           <button className="ghost block" onClick={() => setJobMenu(null)}>取消</button>
+        </div>
+      </div>}
+      {deleteConfirm && <div className="modalBackdrop" onClick={() => { deleteDebug('用户取消删除确认弹层'); setDeleteConfirm(null); }}>
+        <div className="deleteDialog" role="dialog" aria-modal="true" aria-labelledby="deleteDialogTitle" onClick={e => e.stopPropagation()}>
+          <h3 id="deleteDialogTitle">确认删除</h3>
+          <p>{deleteConfirm.mode === 'single' && deleteConfirm.job ? `要删除任务“${displayJobTitle(deleteConfirm.job)}”吗？` : `要删除全部 ${jobs.length} 个任务记录吗？`}</p>
+          <p className="muted">请选择删除方式。删除文件会同时删除任务对应的下载目录。</p>
+          <div className="deleteChoices">
+            <button className="ghost" onClick={() => { deleteDebug('用户取消删除确认弹层'); setDeleteConfirm(null); }}>取消</button>
+            <button onClick={() => executeDelete(false)}>仅删除记录</button>
+            <button className="danger" onClick={() => executeDelete(true)}>删除记录和文件</button>
+          </div>
         </div>
       </div>}
     </div>
@@ -537,7 +574,12 @@ function LibraryPage({ selectedAccount, jobs, setToast, openDownload }: { select
       }
     }
     restore();
-    return () => { cancelled = true; };
+    const onLibraryRefresh = () => restore();
+    window.addEventListener('steamdl-library-refresh', onLibraryRefresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('steamdl-library-refresh', onLibraryRefresh);
+    };
   }, [selectedAccount]);
 
   async function sync(mode: 'full' | 'incremental') {

@@ -692,6 +692,26 @@ ON CONFLICT(username, app_id) DO UPDATE SET
             }
         }
 
+        public void ClearLibraryDownloaded(string username, uint appId)
+        {
+            if (string.IsNullOrWhiteSpace(username) || appId == 0) return;
+            var now = Now();
+            lock (_sync)
+            {
+                using var conn = OpenConnection();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"UPDATE library_games
+SET is_downloaded = 0,
+    downloaded_at = NULL,
+    updated_at = $updated_at
+WHERE username = $username AND app_id = $app_id";
+                Add(cmd, "$username", username.Trim());
+                Add(cmd, "$app_id", (long)appId);
+                Add(cmd, "$updated_at", now);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
         public JsonObject ToJson(JobRecord job, bool includeLog = false)
         {
             if (job == null) return null;
