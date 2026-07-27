@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
@@ -12,6 +13,7 @@ namespace SteamDl.Core
         public string JobId { get; set; }
         public string Kind { get; set; } = "app";
         public string ItemId { get; set; }
+        public string Name { get; set; } = "";
         public string Username { get; set; }
         public bool Anonymous { get; set; }
         public string PlatformOs { get; set; } = "windows";
@@ -24,6 +26,7 @@ namespace SteamDl.Core
         public string ProgressText { get; set; } = "";
         public string LastError { get; set; } = "";
         public bool AutoResume { get; set; } = true;
+        public bool Downloaded { get; set; }
         public string CreatedAt { get; set; }
         public string UpdatedAt { get; set; }
     }
@@ -87,6 +90,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   job_id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
   item_id TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
   username TEXT,
   anonymous INTEGER NOT NULL,
   platform_os TEXT NOT NULL,
@@ -99,6 +103,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   progress_text TEXT NOT NULL DEFAULT '',
   last_error TEXT NOT NULL DEFAULT '',
   auto_resume INTEGER NOT NULL DEFAULT 1,
+  downloaded INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -129,6 +134,8 @@ CREATE TABLE IF NOT EXISTS library_games (
   name TEXT NOT NULL,
   install_dir TEXT NOT NULL DEFAULT '',
   size_bytes INTEGER NOT NULL DEFAULT 0,
+  is_downloaded INTEGER NOT NULL DEFAULT 0,
+  downloaded_at TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY(username, app_id)
 );
@@ -147,7 +154,11 @@ CREATE INDEX IF NOT EXISTS idx_library_games_username_name ON library_games(user
                 EnsureAccountColumn(conn, "remember_password", "INTEGER NOT NULL DEFAULT 0");
                 EnsureAccountColumn(conn, "saved_password", "TEXT");
                 EnsureAccountColumn(conn, "updated_at", "TEXT");
+                EnsureJobColumn(conn, "name", "TEXT NOT NULL DEFAULT ''");
+                EnsureJobColumn(conn, "downloaded", "INTEGER NOT NULL DEFAULT 0");
                 EnsureLibraryGameColumn(conn, "size_bytes", "INTEGER NOT NULL DEFAULT 0");
+                EnsureLibraryGameColumn(conn, "is_downloaded", "INTEGER NOT NULL DEFAULT 0");
+                EnsureLibraryGameColumn(conn, "downloaded_at", "TEXT");
                 EnsureDefaultSetting(conn, "default_download_dir", AppPaths.DefaultDownloadDir());
                 EnsureDefaultSetting(conn, "default_platform_os", "windows");
                 EnsureDefaultSetting(conn, "max_downloads", "8");
@@ -163,6 +174,7 @@ CREATE INDEX IF NOT EXISTS idx_library_games_username_name ON library_games(user
                 JobId = Guid.NewGuid().ToString("N"),
                 Kind = string.IsNullOrWhiteSpace(request.Kind) ? "app" : request.Kind,
                 ItemId = request.Id,
+                Name = string.IsNullOrWhiteSpace(request.GameName) ? "" : request.GameName.Trim(),
                 Username = string.IsNullOrWhiteSpace(request.Username) ? null : request.Username.Trim(),
                 Anonymous = request.Anonymous,
                 PlatformOs = string.IsNullOrWhiteSpace(request.Os) ? "windows" : request.Os,
@@ -179,11 +191,12 @@ CREATE INDEX IF NOT EXISTS idx_library_games_username_name ON library_games(user
                 using var conn = OpenConnection();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = @"
-INSERT INTO jobs (job_id, kind, item_id, username, anonymous, platform_os, depot_id, output_dir, state, prompt, prompt_secret, percent, progress_text, last_error, auto_resume, created_at, updated_at)
-VALUES ($job_id, $kind, $item_id, $username, $anonymous, $platform_os, $depot_id, $output_dir, $state, '', 0, 0, '', '', $auto_resume, $created_at, $updated_at);";
+INSERT INTO jobs (job_id, kind, item_id, name, username, anonymous, platform_os, depot_id, output_dir, state, prompt, prompt_secret, percent, progress_text, last_error, auto_resume, downloaded, created_at, updated_at)
+VALUES ($job_id, $kind, $item_id, $name, $username, $anonymous, $platform_os, $depot_id, $output_dir, $state, '', 0, 0, '', '', $auto_resume, 0, $created_at, $updated_at);";
                 Add(cmd, "$job_id", job.JobId);
                 Add(cmd, "$kind", job.Kind);
                 Add(cmd, "$item_id", job.ItemId);
+                Add(cmd, "$name", job.Name ?? "");
                 Add(cmd, "$username", (object)job.Username ?? DBNull.Value);
                 Add(cmd, "$anonymous", job.Anonymous ? 1 : 0);
                 Add(cmd, "$platform_os", job.PlatformOs);
@@ -479,7 +492,7 @@ ON CONFLICT(username) DO UPDATE SET
                 using var conn = OpenConnection();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT app_id, name, install_dir, size_bytes FROM library_games WHERE username = $username ORDER BY name";
+                    cmd.CommandText = "SELECT app_id, name, install_dir, size_bytes, is_downloaded, downloaded_at FROM library_games WHERE username = $username ORDER BY name";
                     Add(cmd, "$username", username);
                     using var reader = cmd.ExecuteReader();
                     while (reader.Read())
@@ -489,7 +502,9 @@ ON CONFLICT(username) DO UPDATE SET
                             AppId = (uint)reader.GetInt64(0),
                             Name = reader.GetString(1),
                             InstallDir = reader.GetString(2),
-                            SizeBytes = (ulong)reader.GetInt64(3),
+                            SizeBytes = (ulong)Math.Max(0, reader.GetInt64(3)),
+                            IsDownloaded = reader.GetInt32(4) != 0,
+                            DownloadedAt = reader.IsDBNull(5) ? "" : reader.GetString(5),
                         });
                     }
                 }
@@ -521,6 +536,18 @@ ON CONFLICT(username) DO UPDATE SET
             lock (_sync)
             {
                 using var conn = OpenConnection();
+                var existingDownloaded = new Dictionary<uint, (bool Downloaded, string DownloadedAt)>();
+                using (var existing = conn.CreateCommand())
+                {
+                    existing.CommandText = "SELECT app_id, is_downloaded, downloaded_at FROM library_games WHERE username = $username";
+                    Add(existing, "$username", username);
+                    using var reader = existing.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        existingDownloaded[(uint)reader.GetInt64(0)] = (reader.GetInt32(1) != 0, reader.IsDBNull(2) ? "" : reader.GetString(2));
+                    }
+                }
+
                 using var tx = conn.BeginTransaction();
                 using (var deleteGames = conn.CreateCommand())
                 {
@@ -538,15 +565,20 @@ ON CONFLICT(username) DO UPDATE SET
                 }
                 foreach (var item in itemList)
                 {
+                    existingDownloaded.TryGetValue(item.AppId, out var existingState);
+                    var isDownloaded = item.IsDownloaded || existingState.Downloaded;
+                    var downloadedAt = !string.IsNullOrWhiteSpace(item.DownloadedAt) ? item.DownloadedAt : existingState.DownloadedAt;
                     using var cmd = conn.CreateCommand();
                     cmd.Transaction = tx;
-                    cmd.CommandText = @"INSERT INTO library_games (username, app_id, name, install_dir, size_bytes, updated_at)
-VALUES ($username, $app_id, $name, $install_dir, $size_bytes, $updated_at)";
+                    cmd.CommandText = @"INSERT INTO library_games (username, app_id, name, install_dir, size_bytes, is_downloaded, downloaded_at, updated_at)
+VALUES ($username, $app_id, $name, $install_dir, $size_bytes, $is_downloaded, $downloaded_at, $updated_at)";
                     Add(cmd, "$username", username);
                     Add(cmd, "$app_id", (long)item.AppId);
                     Add(cmd, "$name", string.IsNullOrWhiteSpace(item.Name) ? $"App {item.AppId}" : item.Name);
                     Add(cmd, "$install_dir", item.InstallDir ?? "");
                     Add(cmd, "$size_bytes", item.SizeBytes > long.MaxValue ? long.MaxValue : (long)item.SizeBytes);
+                    Add(cmd, "$is_downloaded", isDownloaded ? 1 : 0);
+                    Add(cmd, "$downloaded_at", string.IsNullOrWhiteSpace(downloadedAt) ? DBNull.Value : downloadedAt);
                     Add(cmd, "$updated_at", now);
                     cmd.ExecuteNonQuery();
                 }
@@ -574,6 +606,47 @@ ON CONFLICT(username) DO UPDATE SET last_sync_at = excluded.last_sync_at";
             }
         }
 
+        public void MarkDownloaded(JobRecord job)
+        {
+            if (job == null) return;
+            var now = Now();
+            lock (_sync)
+            {
+                using var conn = OpenConnection();
+                using var tx = conn.BeginTransaction();
+                using (var updateJob = conn.CreateCommand())
+                {
+                    updateJob.Transaction = tx;
+                    updateJob.CommandText = "UPDATE jobs SET downloaded = 1, updated_at = $updated_at WHERE job_id = $job_id";
+                    Add(updateJob, "$job_id", job.JobId);
+                    Add(updateJob, "$updated_at", now);
+                    updateJob.ExecuteNonQuery();
+                }
+
+                if (job.Kind == "app" && !string.IsNullOrWhiteSpace(job.Username) && uint.TryParse(job.ItemId, out var appId))
+                {
+                    using var updateLibrary = conn.CreateCommand();
+                    updateLibrary.Transaction = tx;
+                    updateLibrary.CommandText = @"INSERT INTO library_games (username, app_id, name, install_dir, size_bytes, is_downloaded, downloaded_at, updated_at)
+VALUES ($username, $app_id, $name, $install_dir, 0, 1, $downloaded_at, $updated_at)
+ON CONFLICT(username, app_id) DO UPDATE SET
+  name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE library_games.name END,
+  install_dir = CASE WHEN excluded.install_dir <> '' THEN excluded.install_dir ELSE library_games.install_dir END,
+  is_downloaded = 1,
+  downloaded_at = excluded.downloaded_at,
+  updated_at = excluded.updated_at";
+                    Add(updateLibrary, "$username", job.Username.Trim());
+                    Add(updateLibrary, "$app_id", (long)appId);
+                    Add(updateLibrary, "$name", job.Name ?? "");
+                    Add(updateLibrary, "$install_dir", Path.GetFileName(job.OutputDir) ?? "");
+                    Add(updateLibrary, "$downloaded_at", now);
+                    Add(updateLibrary, "$updated_at", now);
+                    updateLibrary.ExecuteNonQuery();
+                }
+                tx.Commit();
+            }
+        }
+
         public JsonObject ToJson(JobRecord job, bool includeLog = false)
         {
             if (job == null) return null;
@@ -582,6 +655,8 @@ ON CONFLICT(username) DO UPDATE SET last_sync_at = excluded.last_sync_at";
                 ["job_id"] = job.JobId,
                 ["kind"] = job.Kind,
                 ["id"] = job.ItemId,
+                ["name"] = job.Name,
+                ["title"] = string.IsNullOrWhiteSpace(job.Name) ? $"{job.Kind} {job.ItemId}" : job.Name,
                 ["username"] = job.Username,
                 ["anonymous"] = job.Anonymous,
                 ["os"] = job.PlatformOs,
@@ -594,6 +669,7 @@ ON CONFLICT(username) DO UPDATE SET last_sync_at = excluded.last_sync_at";
                 ["progress_text"] = job.ProgressText,
                 ["error"] = job.LastError,
                 ["auto_resume"] = job.AutoResume,
+                ["downloaded"] = job.Downloaded,
                 ["created_at"] = job.CreatedAt,
                 ["updated_at"] = job.UpdatedAt,
             };
@@ -615,6 +691,18 @@ ON CONFLICT(username) DO UPDATE SET last_sync_at = excluded.last_sync_at";
             Add(cmd, "$key", key);
             Add(cmd, "$value", value);
             cmd.ExecuteNonQuery();
+        }
+
+        static void EnsureJobColumn(SqliteConnection conn, string name, string definition)
+        {
+            try
+            {
+                Execute(conn, $"ALTER TABLE jobs ADD COLUMN {name} {definition}");
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
+            {
+                // column already exists
+            }
         }
 
         static void EnsureAccountColumn(SqliteConnection conn, string name, string definition)
@@ -664,6 +752,7 @@ ON CONFLICT(username) DO UPDATE SET last_sync_at = excluded.last_sync_at";
                 JobId = reader.GetString(reader.GetOrdinal("job_id")),
                 Kind = reader.GetString(reader.GetOrdinal("kind")),
                 ItemId = reader.GetString(reader.GetOrdinal("item_id")),
+                Name = reader.GetString(reader.GetOrdinal("name")),
                 Username = ReadNullableString(reader, "username"),
                 Anonymous = reader.GetInt32(reader.GetOrdinal("anonymous")) != 0,
                 PlatformOs = reader.GetString(reader.GetOrdinal("platform_os")),
@@ -676,6 +765,7 @@ ON CONFLICT(username) DO UPDATE SET last_sync_at = excluded.last_sync_at";
                 ProgressText = reader.GetString(reader.GetOrdinal("progress_text")),
                 LastError = reader.GetString(reader.GetOrdinal("last_error")),
                 AutoResume = reader.GetInt32(reader.GetOrdinal("auto_resume")) != 0,
+                Downloaded = reader.GetInt32(reader.GetOrdinal("downloaded")) != 0,
                 CreatedAt = reader.GetString(reader.GetOrdinal("created_at")),
                 UpdatedAt = reader.GetString(reader.GetOrdinal("updated_at")),
             };

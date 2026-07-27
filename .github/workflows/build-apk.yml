@@ -13,13 +13,8 @@ on:
         type: string
         default: ""
   push:
-    branches: [master]
+    branches: [develop]
     tags: ["v*"]
-    paths:
-      - "src/**"
-      - "external/**"
-      - "build.mjs"
-      - ".github/workflows/build-apk.yml"
   pull_request:
     paths:
       - "src/**"
@@ -40,7 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # fork PR 通常拿不到 secrets；只要当前事件能读取到 keystore Secret，Debug/Release 都使用同一份签名
-      CONFIG: ${{ github.event_name == 'pull_request' && 'Debug' || (inputs.config || 'Release') }}
+      # develop 分支提交固定构建 Debug APK；tag 推送和手动默认仍构建 Release
+      CONFIG: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == 'develop')) && 'Debug' || (inputs.config || 'Release') }}
       HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     outputs:
       config: ${{ steps.resolve-config.outputs.config }}

@@ -20,6 +20,7 @@ namespace SteamDl.Core
         public string DepotId { get; set; }
         public string OutputDir { get; set; }
         public string InstallDirName { get; set; }
+        public string GameName { get; set; }
     }
 
     public sealed class LoginState
@@ -39,6 +40,8 @@ namespace SteamDl.Core
         public string Name { get; set; } = "";
         public string InstallDir { get; set; } = "";
         public ulong SizeBytes { get; set; }
+        public bool IsDownloaded { get; set; }
+        public string DownloadedAt { get; set; } = "";
     }
 
     sealed class LibrarySyncState
@@ -68,6 +71,7 @@ namespace SteamDl.Core
         string _currentJobId;
         bool _busy;
         bool _cancelRequested;
+        bool _pauseRequested;
         bool _accountStoreLoaded;
         LoginState _login = new();
         LibrarySyncState _librarySync = new();
@@ -193,7 +197,7 @@ namespace SteamDl.Core
 
                 var outputDir = ResolveOutputDir(request);
                 job = _store.CreateJob(request, outputDir);
-                StartJobLocked(job);
+                StartJobLocked(job, resetProgress: true);
                 return true;
             }
         }
@@ -216,7 +220,14 @@ namespace SteamDl.Core
                     return false;
                 }
 
-                StartJobLocked(job);
+                if (job.State == "paused")
+                {
+                    StartJobLocked(job, resetProgress: false);
+                }
+                else
+                {
+                    StartJobLocked(job, resetProgress: true);
+                }
                 return true;
             }
         }
@@ -229,16 +240,17 @@ namespace SteamDl.Core
                 var job = _store.GetRecoverableJobs().FirstOrDefault();
                 if (job == null) return;
                 _store.AddLog(job.JobId, "检测到可恢复任务,服务启动后自动继续…", MaxLogLines);
-                StartJobLocked(job);
+                StartJobLocked(job, resetProgress: false);
             }
         }
 
-        void StartJobLocked(JobRecord job)
+        void StartJobLocked(JobRecord job, bool resetProgress = true)
         {
             _busy = true;
             _cancelRequested = false;
+            _pauseRequested = false;
             _currentJobId = job.JobId;
-            _store.UpdateState(job.JobId, "starting", percent: 0, progressText: "", error: "", prompt: "", promptSecret: false);
+            _store.UpdateState(job.JobId, "starting", percent: resetProgress ? 0 : null, progressText: resetProgress ? "" : null, error: "", prompt: "", promptSecret: false);
             ConsoleRelay.Instance.DrainPendingInput();
             Task.Run(() => RunAsync(job.JobId));
         }
@@ -254,6 +266,75 @@ namespace SteamDl.Core
         }
 
         public void Cancel() => Cancel(_currentJobId);
+
+        public bool Pause(string jobId, out string error)
+        {
+            error = null;
+            lock (_sync)
+            {
+                if (string.IsNullOrWhiteSpace(jobId))
+                {
+                    error = "任务不存在";
+                    return false;
+                }
+
+                var job = _store.GetJob(jobId);
+                if (job == null)
+                {
+                    error = "任务不存在";
+                    return false;
+                }
+
+                if (jobId == _currentJobId && _busy)
+                {
+                    _pauseRequested = true;
+                    _store.AddLog(jobId, "用户暂停任务，已停止当前下载会话；继续时会从已下载文件恢复。", MaxLogLines);
+                    _store.UpdateState(jobId, "paused", error: "");
+                    ConsoleRelay.Instance.SupplyInput(string.Empty);
+                    Task.Run(ContentDownloader.ShutdownSteam3);
+                    return true;
+                }
+
+                if (job.State is "queued" or "starting" or "running" or "waiting_input" or "interrupted" or "error" or "cancelled")
+                {
+                    _store.UpdateState(jobId, "paused", error: "");
+                    return true;
+                }
+
+                error = "当前任务不能暂停";
+                return false;
+            }
+        }
+
+        public bool Resume(string jobId, out string error)
+        {
+            error = null;
+            lock (_sync)
+            {
+                if (_busy)
+                {
+                    error = "已有任务在进行中";
+                    return false;
+                }
+
+                var job = _store.GetJob(jobId);
+                if (job == null)
+                {
+                    error = "任务不存在";
+                    return false;
+                }
+
+                if (job.State != "paused")
+                {
+                    error = "只有暂停中的任务可以继续";
+                    return false;
+                }
+
+                _store.AddLog(jobId, "继续暂停的任务…", MaxLogLines);
+                StartJobLocked(job, resetProgress: false);
+                return true;
+            }
+        }
 
         public bool Cancel(string jobId)
         {
@@ -392,7 +473,7 @@ namespace SteamDl.Core
                 syncMode = canIncremental ? "incremental" : "full";
                 if (canIncremental)
                 {
-                    preservedItems = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir, SizeBytes = x.SizeBytes }).ToList();
+                    preservedItems = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir, SizeBytes = x.SizeBytes, IsDownloaded = x.IsDownloaded, DownloadedAt = x.DownloadedAt }).ToList();
                     preservedCandidates = _librarySync.KnownCandidateAppIds.ToHashSet();
                     lastSyncAt = _librarySync.LastSyncAt;
                 }
@@ -490,18 +571,22 @@ namespace SteamDl.Core
                 AppendLoginLog(candidateMessage);
                 UpdateLibrarySync(username, s => { s.ResolvedPackageCount = session.PackageInfo.Values.Count(x => x != null); s.CandidateAppCount = appList.Count; s.ScannedAppCount = 0; s.Message = candidateMessage + " 正在读取游戏详情…"; });
 
-                foreach (var appId in appList)
+                var appIdBatches = appList.Chunk(20).ToList();
+                foreach (var batch in appIdBatches)
                 {
-                    await session.RequestAppInfo(appId).ConfigureAwait(false);
-                    LibraryGameItem item = null;
-                    if (session.AppInfo.TryGetValue(appId, out var appInfo) && TryCreateLibraryGameItem(appId, appInfo, out var game)) item = game;
-                    UpdateLibrarySync(username, s =>
+                    await session.RequestAppInfo(batch).ConfigureAwait(false);
+                    foreach (var appId in batch)
                     {
-                        s.ScannedAppCount++;
-                        s.KnownCandidateAppIds.Add(appId);
-                        if (item != null && s.Items.All(x => x.AppId != item.AppId)) s.Items.Add(item);
-                        s.Message = $"同步中：已检查 {s.ScannedAppCount}/{s.CandidateAppCount} 个应用，找到 {s.Items.Count} 个游戏。";
-                    });
+                        LibraryGameItem item = null;
+                        if (session.AppInfo.TryGetValue(appId, out var appInfo) && TryCreateLibraryGameItem(appId, appInfo, out var game)) item = game;
+                        UpdateLibrarySync(username, s =>
+                        {
+                            s.ScannedAppCount++;
+                            s.KnownCandidateAppIds.Add(appId);
+                            if (item != null && s.Items.All(x => x.AppId != item.AppId)) s.Items.Add(item);
+                            s.Message = $"同步中：已检查 {s.ScannedAppCount}/{s.CandidateAppCount} 个应用，找到 {s.Items.Count} 个游戏。";
+                        });
+                    }
                 }
 
                 var doneMessage = $"游戏库{(syncMode == "full" ? "全量" : "增量")}同步完成，共显示 {LibrarySyncItemCount(username)} 个游戏。";
@@ -547,7 +632,7 @@ namespace SteamDl.Core
             lock (_sync)
             {
                 if (!string.Equals(_librarySync.Username, username, StringComparison.OrdinalIgnoreCase)) return;
-                items = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir, SizeBytes = x.SizeBytes }).ToList();
+                items = _librarySync.Items.Select(x => new LibraryGameItem { AppId = x.AppId, Name = x.Name, InstallDir = x.InstallDir, SizeBytes = x.SizeBytes, IsDownloaded = x.IsDownloaded, DownloadedAt = x.DownloadedAt }).ToList();
                 candidates = _librarySync.KnownCandidateAppIds.ToHashSet();
                 lastSyncAt = _librarySync.LastSyncAt;
             }
@@ -589,7 +674,9 @@ namespace SteamDl.Core
                     ["installdir"] = item.InstallDir,
                     ["install_dir"] = item.InstallDir,
                     ["size_bytes"] = item.SizeBytes,
-                    ["size_text"] = item.SizeBytes > 0 ? FormatBytes(item.SizeBytes) : "大小待获取",
+                    ["size_text"] = item.SizeBytes > 0 ? FormatBytes(item.SizeBytes) : "",
+                    ["is_downloaded"] = item.IsDownloaded,
+                    ["downloaded_at"] = item.DownloadedAt,
                     ["header_image"] = $"https://cdn.cloudflare.steamstatic.com/steam/apps/{item.AppId}/header.jpg",
                 });
             }
@@ -977,23 +1064,36 @@ namespace SteamDl.Core
                     ContentDownloader.ShutdownSteam3();
                 }
 
-                if (_cancelRequested)
+                if (_pauseRequested)
+                {
+                    _store.UpdateState(jobId, "paused", error: "");
+                }
+                else if (_cancelRequested)
                 {
                     _store.UpdateState(jobId, "cancelled");
                 }
                 else
                 {
                     _store.UpdateState(jobId, "done", percent: 100, progressText: "已保存到: " + job.OutputDir);
+                    _store.MarkDownloaded(job);
+                    MarkLibraryGameDownloaded(job);
                 }
             }
             catch (OperationCanceledException)
             {
-                _store.UpdateState(jobId, "cancelled");
+                _store.UpdateState(jobId, _pauseRequested ? "paused" : "cancelled");
             }
             catch (Exception ex)
             {
-                AppendLog(ex.Message);
-                _store.UpdateState(jobId, _cancelRequested ? "cancelled" : "error", error: ex.Message);
+                if (_pauseRequested)
+                {
+                    _store.UpdateState(jobId, "paused", error: "");
+                }
+                else
+                {
+                    AppendLog(ex.Message);
+                    _store.UpdateState(jobId, _cancelRequested ? "cancelled" : "error", error: ex.Message);
+                }
             }
             finally
             {
@@ -1005,7 +1105,21 @@ namespace SteamDl.Core
                     }
                     _busy = false;
                     _cancelRequested = false;
+                    _pauseRequested = false;
                 }
+            }
+        }
+
+        void MarkLibraryGameDownloaded(JobRecord job)
+        {
+            if (job?.Kind != "app" || string.IsNullOrWhiteSpace(job.Username) || !uint.TryParse(job.ItemId, out var appId)) return;
+            lock (_sync)
+            {
+                if (!string.Equals(_librarySync.Username, job.Username.Trim(), StringComparison.OrdinalIgnoreCase)) return;
+                var item = _librarySync.Items.FirstOrDefault(x => x.AppId == appId);
+                if (item == null) return;
+                item.IsDownloaded = true;
+                item.DownloadedAt = DateTime.UtcNow.ToString("O");
             }
         }
 
@@ -1105,6 +1219,11 @@ namespace SteamDl.Core
                 cached = cache.Items.FirstOrDefault(x => x.AppId == appId);
             }
 
+            if (!string.IsNullOrWhiteSpace(cached?.Name) && string.IsNullOrWhiteSpace(request.GameName))
+            {
+                request.GameName = cached.Name;
+            }
+
             if (!string.IsNullOrWhiteSpace(cached?.InstallDir))
             {
                 request.InstallDirName = cached.InstallDir;
@@ -1146,6 +1265,7 @@ namespace SteamDl.Core
                 DepotId = job.DepotId,
                 OutputDir = Path.GetDirectoryName(job.OutputDir),
                 InstallDirName = Path.GetFileName(job.OutputDir),
+                GameName = job.Name,
             };
         }
 

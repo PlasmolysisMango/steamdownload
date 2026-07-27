@@ -142,12 +142,18 @@ namespace DepotDownloader
 
         public async Task RequestAppInfo(uint appId, bool bForce = false)
         {
-            if ((AppInfo.ContainsKey(appId) && !bForce) || bAborted)
-                return;
+            await RequestAppInfo([appId], bForce);
+        }
 
-            var appTokens = await steamApps.PICSGetAccessTokens([appId], []);
+        public async Task RequestAppInfo(IEnumerable<uint> appIds, bool bForce = false)
+        {
+            var apps = appIds?.Distinct().ToList() ?? [];
+            apps.RemoveAll(appId => (AppInfo.ContainsKey(appId) && !bForce) || bAborted);
+            if (apps.Count == 0 || bAborted) return;
 
-            if (appTokens.AppTokensDenied.Contains(appId))
+            var appTokens = await steamApps.PICSGetAccessTokens(apps, []);
+
+            foreach (var appId in appTokens.AppTokensDenied)
             {
                 Console.WriteLine("Insufficient privileges to get access token for app {0}", appId);
             }
@@ -157,21 +163,24 @@ namespace DepotDownloader
                 this.AppTokens[token_dict.Key] = token_dict.Value;
             }
 
-            var request = new SteamApps.PICSRequest(appId);
-
-            if (AppTokens.TryGetValue(appId, out var token))
+            var requests = new List<SteamApps.PICSRequest>();
+            foreach (var appId in apps)
             {
-                request.AccessToken = token;
+                var request = new SteamApps.PICSRequest(appId);
+                if (AppTokens.TryGetValue(appId, out var token))
+                {
+                    request.AccessToken = token;
+                }
+                requests.Add(request);
             }
 
-            var appInfoMultiple = await steamApps.PICSGetProductInfo([request], []);
+            var appInfoMultiple = await steamApps.PICSGetProductInfo(requests, []);
 
             foreach (var appInfo in appInfoMultiple.Results)
             {
                 foreach (var app_value in appInfo.Apps)
                 {
                     var app = app_value.Value;
-
                     Console.WriteLine("Got AppInfo for {0}", app.ID);
                     AppInfo[app.ID] = app;
                 }

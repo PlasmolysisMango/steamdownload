@@ -242,6 +242,24 @@ namespace SteamDl.Core
                         await WriteJsonAsync(ctx, 200, Ok());
                         break;
 
+                    case ("POST", _) when IsJobPath(path, out var jobId, out var action) && action == "pause":
+                        if (!JobManager.Instance.Pause(jobId, out var pauseError))
+                        {
+                            await WriteJsonAsync(ctx, pauseError == "任务不存在" ? 404 : 409, Error(pauseError));
+                            break;
+                        }
+                        await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+
+                    case ("POST", _) when IsJobPath(path, out var jobId, out var action) && action == "resume":
+                        if (!JobManager.Instance.Resume(jobId, out var resumeError))
+                        {
+                            await WriteJsonAsync(ctx, resumeError == "已有任务在进行中" ? 409 : 400, Error(resumeError));
+                            break;
+                        }
+                        await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+
                     case ("POST", "/api/input"):
                     {
                         var body = await ReadJsonAsync(req);
@@ -442,6 +460,7 @@ namespace SteamDl.Core
             Os = FirstNonBlank(body?["os"]?.GetValue<string>(), "windows"),
             DepotId = FirstNonBlank(body?["depot"]?.ToString(), body?["depot_id"]?.ToString()),
             OutputDir = body?["output_dir"]?.GetValue<string>(),
+            GameName = FirstNonBlank(body?["name"]?.GetValue<string>(), body?["title"]?.GetValue<string>()),
             InstallDirName = FirstNonBlank(
                 body?["install_dir"]?.GetValue<string>(),
                 body?["installdir"]?.GetValue<string>(),
