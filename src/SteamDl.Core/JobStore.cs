@@ -378,14 +378,14 @@ WHERE job_id = $job_id AND id NOT IN (
                 using var conn = OpenConnection();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = @"
-SELECT line FROM (
-  SELECT id, line FROM job_logs WHERE job_id = $job_id ORDER BY id DESC LIMIT $limit
+SELECT line, created_at FROM (
+  SELECT id, line, created_at FROM job_logs WHERE job_id = $job_id ORDER BY id DESC LIMIT $limit
 ) ORDER BY id ASC";
                 Add(cmd, "$job_id", jobId);
                 Add(cmd, "$limit", limit);
                 using var reader = cmd.ExecuteReader();
                 var lines = new List<string>();
-                while (reader.Read()) lines.Add(reader.GetString(0));
+                while (reader.Read()) lines.Add(FormatLogLine(reader.GetString(0), reader.GetString(1)));
                 return string.Join('\n', lines);
             }
         }
@@ -809,6 +809,16 @@ WHERE username = $username AND app_id = $app_id";
         }
 
         static string Now() => DateTimeOffset.UtcNow.ToString("O");
+
+        static string FormatLogLine(string line, string createdAt)
+        {
+            if (string.IsNullOrEmpty(line)) return "";
+            if (!string.IsNullOrWhiteSpace(createdAt) && DateTimeOffset.TryParse(createdAt, out var time))
+            {
+                return $"[{time.ToLocalTime():yyyy-MM-dd HH:mm:ss}] {line}";
+            }
+            return line;
+        }
 
         static JobRecord ReadJob(SqliteDataReader reader)
         {

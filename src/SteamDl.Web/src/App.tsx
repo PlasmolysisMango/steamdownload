@@ -38,8 +38,9 @@ type Tab = 'accounts' | 'download' | 'library' | 'jobs' | 'settings';
 
 function deleteDebug(message: string, data?: unknown, error = false) {
   const payload = data === undefined ? '' : data;
-  if (error) console.error(`[SteamDl][delete-task] ${message}`, payload);
-  else console.log(`[SteamDl][delete-task] ${message}`, payload);
+  const timestamp = new Date().toLocaleString();
+  if (error) console.error(`[${timestamp}][SteamDl][delete-task] ${message}`, payload);
+  else console.log(`[${timestamp}][SteamDl][delete-task] ${message}`, payload);
 }
 
 async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {

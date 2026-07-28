@@ -1003,9 +1003,10 @@ namespace SteamDl.Core
                 {
                     Username = username,
                     State = "running",
-                    Log = "开始登录 " + username + "…",
+                    Log = "",
                     RememberPassword = rememberPassword,
                 };
+                AppendLoginLog("开始登录 " + username + "…");
                 ConsoleRelay.Instance.DrainPendingInput();
                 Task.Run(() => LoginAsync(username, password, rememberPassword));
                 return true;
@@ -1376,11 +1377,13 @@ namespace SteamDl.Core
             lock (_sync)
             {
                 var lines = (_login.Log ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
-                lines.Add(line);
+                lines.Add(FormatLogLine(line));
                 if (lines.Count > MaxLogLines) lines = lines.Skip(lines.Count - MaxLogLines).ToList();
                 _login.Log = string.Join('\n', lines);
             }
         }
+
+        static string FormatLogLine(string line) => $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] {line}";
 
         static string Validate(DownloadRequest request)
         {
