@@ -8,14 +8,13 @@ on:
         type: choice
         options: [Release, Debug]
         default: Release
+      release_tag:
+        description: "发布到 Release 的 tag 名（留空=不发布；若在某个 tag 的 ref 上手动触发可留空，会自动用该 tag）"
+        type: string
+        default: ""
   push:
-    branches: [master]
+    branches: [develop]
     tags: ["v*"]
-    paths:
-      - "src/**"
-      - "external/**"
-      - "build.mjs"
-      - ".github/workflows/build-apk.yml"
   pull_request:
     paths:
       - "src/**"
@@ -28,15 +27,30 @@ concurrency:
   group: build-apk-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write # release 任务需要创建/更新 GitHub Release 并上传附件
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
     env:
-      # PR 上不使用签名密钥，只构建 Debug；master/tag/手动触发才使用 Release + 签名
-      CONFIG: ${{ github.event_name == 'pull_request' && 'Debug' || (inputs.config || 'Release') }}
+      # fork PR 通常拿不到 secrets；只要当前事件能读取到 keystore Secret，Debug/Release 都使用同一份签名
+      # develop 分支提交固定构建 Debug APK；tag 推送和手动默认仍构建 Release
+      CONFIG: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == 'develop')) && 'Debug' || (inputs.config || 'Release') }}
       HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    outputs:
+      config: ${{ steps.resolve-config.outputs.config }}
+      artifact-name: ${{ steps.resolve-config.outputs.artifact-name }}
+      apk-name: ${{ steps.resolve-config.outputs.apk-name }}
 
     steps:
+      - name: Resolve config
+        id: resolve-config
+        run: |
+          echo "config=${{ env.CONFIG }}" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=steamdl-apk-${{ env.CONFIG }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "apk-name=SteamDl-${{ env.CONFIG }}.apk" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -69,15 +83,42 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Prepare release keystore
-        if: env.HAS_RELEASE_KEYSTORE == 'true' && env.CONFIG == 'Release'
+      - name: Prepare signing keystore
+        if: env.HAS_RELEASE_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           mkdir -p .tools/keystore
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > .tools/keystore/steamdl-release.keystore
+          python3 - <<'PY'
+          import base64
+          import os
+          import sys
+
+          raw = (os.environ.get('ANDROID_KEYSTORE_BASE64') or '').strip()
+          if raw.startswith('ANDROID_KEYSTORE_BASE64=') or '\nANDROID_KEYSTORE_BASE64=' in raw:
+              print('::error::ANDROID_KEYSTORE_BASE64 Secret 填写错误：Secret Name 应为 ANDROID_KEYSTORE_BASE64，Secret Value 只能填写等号右侧的 base64 内容，不要包含 ANDROID_KEYSTORE_BASE64= 前缀。')
+              sys.exit(1)
+          raw = raw.strip('"\'')
+          compact = ''.join(raw.split())
+          if not compact:
+              print('::error::ANDROID_KEYSTORE_BASE64 Secret 为空')
+              sys.exit(1)
+          try:
+              data = base64.b64decode(compact, validate=True)
+          except Exception:
+              print('::error::ANDROID_KEYSTORE_BASE64 不是有效 base64。请只填写 github-actions-secrets.env 中 ANDROID_KEYSTORE_BASE64= 右侧的值；不要包含空格或截断。')
+              sys.exit(1)
+          if len(data) < 512:
+              print('::error::解码后的 keystore 过小，Secret 可能被截断或复制错误')
+              sys.exit(1)
+          with open('.tools/keystore/steamdl-release.keystore', 'wb') as f:
+              f.write(data)
+          print(f'Keystore restored: {len(data)} bytes')
+          PY
 
       - name: Build APK
         env:
-          ANDROID_KEYSTORE: ${{ (env.HAS_RELEASE_KEYSTORE == 'true' && env.CONFIG == 'Release') && '.tools/keystore/steamdl-release.keystore' || '' }}
+          ANDROID_KEYSTORE: ${{ env.HAS_RELEASE_KEYSTORE == 'true' && format('{0}/.tools/keystore/steamdl-release.keystore', github.workspace) || '' }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_STORE_PASS: ${{ secrets.ANDROID_STORE_PASS }}
           ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
@@ -87,10 +128,75 @@ jobs:
             --nuget-source=https://api.nuget.org/v3/index.json \
             --npm-registry=https://registry.npmjs.org
 
+      - name: Prepare direct APK file
+        run: |
+          mkdir -p artifacts/direct
+          python3 - <<'PY'
+          import glob
+          import os
+          import shutil
+          import sys
+
+          apk_name = '${{ steps.resolve-config.outputs.apk-name }}'
+          apks = sorted(glob.glob('artifacts/apk/*.apk'))
+          signed = [p for p in apks if p.lower().endswith('-signed.apk')]
+          selected = signed[0] if signed else (apks[0] if apks else None)
+          if not selected:
+              print('::error::未找到 APK 产物')
+              sys.exit(1)
+          target = os.path.join('artifacts', 'direct', apk_name)
+          shutil.copyfile(selected, target)
+          print(f'Direct APK: {target}')
+          PY
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: steamdl-apk-${{ env.CONFIG }}-${{ github.sha }}
-          path: artifacts/apk/*.apk
+          name: ${{ steps.resolve-config.outputs.artifact-name }}
+          path: artifacts/direct/${{ steps.resolve-config.outputs.apk-name }}
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
+
+  release:
+    needs: build-apk
+    runs-on: ubuntu-latest
+    # 仅当推送了 tag，或手动触发时显式填写了 release_tag 时，才发布到 GitHub Release（PR 不发布）
+    if: github.event_name != 'pull_request' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    steps:
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-apk.outputs.artifact-name }}
+          path: dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          CONFIG: ${{ needs.build-apk.outputs.config }}
+          SHA: ${{ github.sha }}
+        run: |
+          mapfile -t apks < <(find dist -type f -name '*.apk' | sort)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::未找到可发布的 APK 文件"
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${apks[@]}" --clobber --repo "$REPO"
+          else
+            gh release create "$TAG" "${apks[@]}" \
+              --title "$TAG" \
+              --notes "自动构建（CONFIG=$CONFIG, commit=$SHA）" \
+              --repo "$REPO"
+          fi

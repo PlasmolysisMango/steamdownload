@@ -27,9 +27,9 @@ namespace SteamDl.Android
 
         protected override void OnCreate(Bundle savedInstanceState)
         {
+            RequestWindowFeature(WindowFeatures.NoTitle);
             base.OnCreate(savedInstanceState);
-
-            RequestRuntimePermissions();
+            ActionBar?.Hide();
 
             // 先拉起前台服务(内含 HTTP 服务),再加载页面
             var intent = new Intent(this, typeof(global::SteamDl.Android.DownloadService));
@@ -45,13 +45,17 @@ namespace SteamDl.Android
             _webView = new WebView(this);
             _webView.Settings.JavaScriptEnabled = true;
             _webView.Settings.DomStorageEnabled = true;
+            _webView.Settings.SetSupportZoom(false);
+            _webView.Settings.BuiltInZoomControls = false;
+            _webView.Settings.DisplayZoomControls = false;
             _webView.SetWebViewClient(new WebViewClient());
             WebApi.PickDirectoryHandler = PickDirectory;
             SetContentView(_webView);
 
-            // 给服务一点启动时间后加载;失败时页面下拉刷新即可
+            // 给服务一点启动时间后加载；权限弹窗/系统设置页延后，避免用户点击图标后先被带离应用。
             _webView.PostDelayed(() =>
                 _webView.LoadUrl($"http://127.0.0.1:{(global::SteamDl.Android.DownloadService.Port)}/"), 600);
+            _webView.PostDelayed(RequestRuntimePermissions, 1500);
         }
 
         void RequestRuntimePermissions()

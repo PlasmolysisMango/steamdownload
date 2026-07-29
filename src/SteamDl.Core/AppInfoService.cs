@@ -38,9 +38,24 @@ namespace SteamDl.Core
                 ["header_image"] = data?["header_image"]?.GetValue<string>() ?? string.Empty,
                 ["is_free"] = data?["is_free"]?.GetValue<bool>() ?? false,
                 ["type"] = data?["type"]?.GetValue<string>() ?? string.Empty,
+                ["installdir"] = data?["config"]?["installdir"]?.GetValue<string>() ?? string.Empty,
+                ["install_dir"] = data?["config"]?["installdir"]?.GetValue<string>() ?? string.Empty,
+                ["size_bytes"] = ReadUInt64(data?["size_bytes"] ?? data?["size"] ?? data?["depots"]?["branches"]?["public"]?["download_size"]),
             };
             Cache[appId] = info;
             return info;
+        }
+
+        static ulong ReadUInt64(JsonNode node)
+        {
+            if (node == null) return 0;
+            if (node is JsonValue value)
+            {
+                if (value.TryGetValue<ulong>(out var ulongValue)) return ulongValue;
+                if (value.TryGetValue<long>(out var longValue) && longValue > 0) return (ulong)longValue;
+                if (value.TryGetValue<string>(out var stringValue) && ulong.TryParse(stringValue, out var parsed)) return parsed;
+            }
+            return 0;
         }
 
         /// <summary>解析创意工坊物品所属的消费端 AppID(DownloadPubfileAsync 需要)。</summary>

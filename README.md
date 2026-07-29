@@ -147,13 +147,33 @@ Release 签名（可选，未配置则脚本会在 CI 里生成一个临时本�
 1. 本地生成正式 keystore: keytool -genkeypair -v -keystore steamdl-release.keystore -alias steamdl -keyalg RSA -keysize 2048 -validity 10000
 2. 转 base64: base64 -w0 steamdl-release.keystore
 3. 在仓库 Settings -> Secrets and variables -> Actions 中添加:
-   ANDROID_KEYSTORE_BASE64  # 上一步 base64 结果
+   ANDROID_KEYSTORE_BASE64  # 只填 github-actions-secrets.env 中 ANDROID_KEYSTORE_BASE64= 右侧的值
    ANDROID_KEY_ALIAS
    ANDROID_STORE_PASS
    ANDROID_KEY_PASS
 ```
 
-配置好这些 secrets 后，`push master` / `push tag` / 手动触发且选择 Release 时会使用该 keystore 签名；未配置时 Release 构建仍会成功，但每次生成的临时 keystore 不同，产物无法覆盖升级，仅用于验证构建流程。构建完成后在该次 workflow run 的 Artifacts 中下载 `steamdl-apk-<config>-<sha>`，里面是生成的 `.apk` 文件。
+配置好这些 secrets 后，`push master` / `push tag` / 手动触发构建会使用该 keystore 签名；只要 Secret 存在，Debug 和 Release 都会使用同一份签名，方便本地/CI 产物互相覆盖安装。未配置时 Release 构建仍会成功，但每次生成的临时 keystore 不同，产物无法覆盖升级，仅用于验证构建流程。构建完成后，workflow 会把最终 APK 规范化为单个 `SteamDl-<config>.apk` 上传到 Artifacts；受 GitHub Actions 平台限制，从 Artifacts 按钮下载时仍会被 GitHub 自动包装成 zip，但 zip 内只有这一个 APK，且 workflow 使用 `compression-level: 0` 不再二次压缩。
+
+本地构建也会优先读取 `.tools/keystore/github-actions-secrets.env`，复用同一套 GitHub Actions Secrets。也就是说，生成好该文件后直接执行 `node build.mjs build-apk --config=Debug` 或 `node build.mjs build-apk --config=Release` 都会使用正式 keystore；如果 `.tools/keystore/steamdl-release.keystore` 不存在，脚本会自动从文件里的 `ANDROID_KEYSTORE_BASE64` 还原。需要使用其他文件时可传 `--signing-env=<file>` 或设置 `ANDROID_SIGNING_ENV=<file>`。`build.mjs` 会把相对 keystore 路径按仓库根目录解析为绝对路径，GitHub Actions 也会传入绝对路径，避免 Android 构建目标按项目目录误解析。
+
+如果 GitHub Actions 在 `Prepare signing keystore` 步骤提示 `ANDROID_KEYSTORE_BASE64 不是有效 base64`，通常是 Secret 值复制错了。请打开 `.tools/keystore/github-actions-secrets.env`，把 `ANDROID_KEYSTORE_BASE64=` 右侧那一整行作为 Secret Value；如果把整行 `ANDROID_KEYSTORE_BASE64=...` 都粘进 Value，workflow 会直接报错。
+
+### 发布到 GitHub Release 页面下载
+
+`build-apk` 任务成功后，会额外跑一个 `release` 任务，把 APK 发布/追加到仓库的 Release 页面，两种方式触发：
+
+```text
+方式一（推荐）：直接推送 tag，例如
+  git tag v1.0.0 && git push origin v1.0.0
+  会自动构建 Release APK，并以该 tag 创建/更新同名 GitHub Release，附带 apk 文件。
+
+方式二：手动触发（Actions 页面 -> Build Android APK -> Run workflow）
+  a. 若在 "Use workflow from" 里选择的是某个已存在的 tag（而不是 master 分支），release_tag 留空即可，会自动用该 tag 发布；
+  b. 若在 master 分支上手动触发，必须在 release_tag 输入框里填一个 tag 名（可以是尚未创建的新 tag 名），才会发布 Release；留空则只构建、不发布。
+```
+
+`release` 任务用 `gh release create` / `gh release upload`（GitHub CLI，runner 自带，无需额外配置）发布，若同名 tag 的 Release 已存在会用 `--clobber` 追加/覆盖 apk 文件而不是报错。该任务会从下载后的 artifact 中递归查找 `*.apk`，只把 APK 文件作为 Release 附件上传，因此 Release 页面下载到的是直接的 `SteamDl-<config>.apk`，不是 zip。该任务需要 `contents: write` 权限（工作流已声明），并且只在 `push tag` 或手动触发且填写了 `release_tag` 时运行，`pull_request` 上不会触发发布。
 
 ## 使用说明
 

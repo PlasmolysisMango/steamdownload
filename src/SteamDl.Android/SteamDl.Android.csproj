@@ -4,6 +4,7 @@
     <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
     <OutputType>Exe</OutputType>
     <ApplicationId>app.steamdl</ApplicationId>
+    <ApplicationTitle>SteamDl</ApplicationTitle>
     <ApplicationVersion>1</ApplicationVersion>
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
     <Nullable>disable</Nullable>

@@ -7,7 +7,10 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
   <application
-      android:label="Steam 下载器"
+      android:label="SteamDl"
+      android:icon="@drawable/app_icon"
+      android:roundIcon="@drawable/app_icon"
+      android:theme="@style/AppTheme"
       android:usesCleartextTraffic="true"
       android:allowBackup="true">
   </application>

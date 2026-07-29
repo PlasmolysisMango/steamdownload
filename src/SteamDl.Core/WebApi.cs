@@ -183,6 +183,22 @@ namespace SteamDl.Core
                         break;
                     }
 
+                    case ("DELETE", "/api/jobs"):
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var deleteFiles = body?["delete_files"]?.GetValue<bool>() == true;
+                        Console.WriteLine($"[delete-task] API DELETE /api/jobs received delete_files={deleteFiles}");
+                        if (!JobManager.Instance.DeleteAllJobs(deleteFiles, out var deleteAllError))
+                        {
+                            Console.WriteLine($"[delete-task] API DELETE /api/jobs failed error={deleteAllError}");
+                            await WriteJsonAsync(ctx, 409, Error(deleteAllError));
+                            break;
+                        }
+                        Console.WriteLine("[delete-task] API DELETE /api/jobs succeeded");
+                        await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+                    }
+
                     case ("POST", "/api/jobs"):
                     case ("POST", "/api/download"):
                     {
@@ -207,6 +223,22 @@ namespace SteamDl.Core
                         }
 
                         await WriteJsonAsync(ctx, 200, job);
+                        break;
+                    }
+
+                    case ("DELETE", _) when IsJobPath(path, out var jobId, out var action) && action == null:
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var deleteFiles = body?["delete_files"]?.GetValue<bool>() == true;
+                        Console.WriteLine($"[delete-task] API DELETE /api/jobs/{{jobId}} received job_id={jobId} delete_files={deleteFiles}");
+                        if (!JobManager.Instance.DeleteJob(jobId, deleteFiles, out var deleteError))
+                        {
+                            Console.WriteLine($"[delete-task] API DELETE /api/jobs/{{jobId}} failed job_id={jobId} error={deleteError}");
+                            await WriteJsonAsync(ctx, deleteError == "任务不存在" ? 404 : 409, Error(deleteError));
+                            break;
+                        }
+                        Console.WriteLine($"[delete-task] API DELETE /api/jobs/{{jobId}} succeeded job_id={jobId}");
+                        await WriteJsonAsync(ctx, 200, Ok());
                         break;
                     }
 
@@ -237,6 +269,24 @@ namespace SteamDl.Core
                         if (!JobManager.Instance.Retry(jobId, out var retryError))
                         {
                             await WriteJsonAsync(ctx, retryError == "已有任务在进行中" ? 409 : 400, Error(retryError));
+                            break;
+                        }
+                        await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+
+                    case ("POST", _) when IsJobPath(path, out var jobId, out var action) && action == "pause":
+                        if (!JobManager.Instance.Pause(jobId, out var pauseError))
+                        {
+                            await WriteJsonAsync(ctx, pauseError == "任务不存在" ? 404 : 409, Error(pauseError));
+                            break;
+                        }
+                        await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+
+                    case ("POST", _) when IsJobPath(path, out var jobId, out var action) && action == "resume":
+                        if (!JobManager.Instance.Resume(jobId, out var resumeError))
+                        {
+                            await WriteJsonAsync(ctx, resumeError == "已有任务在进行中" ? 409 : 400, Error(resumeError));
                             break;
                         }
                         await WriteJsonAsync(ctx, 200, Ok());
@@ -298,7 +348,7 @@ namespace SteamDl.Core
                     {
                         var body = await ReadJsonAsync(req);
                         var answer = body?["answer"]?.GetValue<string>() ?? "";
-                        if (!JobManager.Instance.SupplyLoginInput(answer))
+                        if (!await JobManager.Instance.SupplyLoginInputAndWaitAsync(answer))
                         {
                             await WriteJsonAsync(ctx, 409, Error("当前没有等待输入的登录流程"));
                             break;
@@ -337,6 +387,24 @@ namespace SteamDl.Core
                     {
                         var username = req.QueryString["username"];
                         await WriteJsonAsync(ctx, 200, await JobManager.Instance.LibraryJsonAsync(username).ConfigureAwait(false));
+                        break;
+                    }
+
+                    case ("POST", "/api/library/sync"):
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var username = body?["username"]?.GetValue<string>() ?? req.QueryString["username"];
+                        var forceFullSync = body?["force_full_sync"]?.GetValue<bool>() == true ||
+                            string.Equals(body?["mode"]?.GetValue<string>(), "full", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(req.QueryString["mode"], "full", StringComparison.OrdinalIgnoreCase);
+                        await WriteJsonAsync(ctx, 200, JobManager.Instance.StartLibrarySync(username, forceFullSync));
+                        break;
+                    }
+
+                    case ("GET", "/api/library/status"):
+                    {
+                        var username = req.QueryString["username"];
+                        await WriteJsonAsync(ctx, 200, JobManager.Instance.LibrarySyncStatusJson(username));
                         break;
                     }
 
@@ -417,15 +485,30 @@ namespace SteamDl.Core
 
         static DownloadRequest ToDownloadRequest(JsonObject body) => new()
         {
-            Kind = body?["kind"]?.GetValue<string>() ?? "app",
-            Id = (body?["id"]?.ToString() ?? body?["item_id"]?.ToString() ?? "").Trim(),
+            Kind = FirstNonBlank(body?["kind"]?.GetValue<string>(), "app"),
+            Id = FirstNonBlank(body?["id"]?.ToString(), body?["item_id"]?.ToString(), "").Trim(),
             Username = body?["username"]?.GetValue<string>(),
             Anonymous = body?["anonymous"]?.GetValue<bool>() ?? false,
-            Os = body?["os"]?.GetValue<string>() ?? "windows",
-            DepotId = body?["depot"]?.ToString() ?? body?["depot_id"]?.ToString(),
+            Os = FirstNonBlank(body?["os"]?.GetValue<string>(), "windows"),
+            DepotId = FirstNonBlank(body?["depot"]?.ToString(), body?["depot_id"]?.ToString()),
             OutputDir = body?["output_dir"]?.GetValue<string>(),
+            GameName = FirstNonBlank(body?["name"]?.GetValue<string>(), body?["title"]?.GetValue<string>()),
+            InstallDirName = FirstNonBlank(
+                body?["install_dir"]?.GetValue<string>(),
+                body?["installdir"]?.GetValue<string>(),
+                body?["name"]?.GetValue<string>()),
         };
 
+        
+        static string FirstNonBlank(params string[] values)
+        {
+            foreach (var value in values)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+            }
+            return null;
+        }
+        
         static AppSettings ParseSettings(JsonObject body) => new()
         {
             DefaultDownloadDir = body?["default_download_dir"]?.GetValue<string>() ?? JobStore.Instance.GetSettings().DefaultDownloadDir,
