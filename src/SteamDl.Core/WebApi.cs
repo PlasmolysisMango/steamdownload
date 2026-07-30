@@ -1,10 +1,10 @@
-// 内嵌 HTTP 服务:提供 React 静态资源与 /api 契约。基于 HttpListener,
-// 无 ASP.NET Core 依赖,可同时运行于桌面(.NET)与 Android(Mono)。
+// 内嵌 HTTP 服务:仅提供 /api 契约,作为 Flutter 原生 UI 与下载引擎之间的
+// 本机 IPC 通道(127.0.0.1)。基于 HttpListener,无 ASP.NET Core 依赖,
+// 可同时运行于桌面(.NET)与 Android(linux-bionic sidecar)。
 using System;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Reflection;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -14,7 +14,6 @@ namespace SteamDl.Core
     public sealed class WebApi
     {
         readonly HttpListener _listener = new();
-        readonly Assembly _assembly = typeof(WebApi).Assembly;
         volatile bool _running;
 
         public static Func<string, bool> OpenPathHandler { get; set; }
@@ -70,7 +69,14 @@ namespace SteamDl.Core
             {
                 if (method == "GET" && !path.StartsWith("/api/", StringComparison.Ordinal))
                 {
-                    await ServeStaticAsync(ctx, path).ConfigureAwait(false);
+                    // 非 API 请求返回服务标识,供 Flutter 侧健康检查/发现使用
+                    await WriteJsonAsync(ctx, 200, new JsonObject
+                    {
+                        ["service"] = "steamdl",
+                        ["engine"] = "DepotDownloader",
+                        ["api"] = "/api",
+                        ["ok"] = true,
+                    }).ConfigureAwait(false);
                     return;
                 }
 
@@ -438,39 +444,6 @@ namespace SteamDl.Core
             }
         }
 
-        async Task ServeStaticAsync(HttpListenerContext ctx, string path)
-        {
-            var resourcePath = path == "/" || path == "/index.html"
-                ? "wwwroot/index.html"
-                : "wwwroot" + Uri.UnescapeDataString(path);
-
-            if (resourcePath.Contains("..", StringComparison.Ordinal))
-            {
-                await WriteJsonAsync(ctx, 400, Error("bad path"));
-                return;
-            }
-
-            using var stream = _assembly.GetManifestResourceStream(resourcePath);
-            if (stream == null)
-            {
-                using var fallback = _assembly.GetManifestResourceStream("wwwroot/index.html");
-                if (fallback == null)
-                {
-                    await WriteJsonAsync(ctx, 404, Error("static resource not found"));
-                    return;
-                }
-
-                using var fallbackMs = new MemoryStream();
-                await fallback.CopyToAsync(fallbackMs).ConfigureAwait(false);
-                await WriteRawAsync(ctx, 200, "text/html; charset=utf-8", fallbackMs.ToArray()).ConfigureAwait(false);
-                return;
-            }
-
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms).ConfigureAwait(false);
-            await WriteRawAsync(ctx, 200, ContentType(resourcePath), ms.ToArray()).ConfigureAwait(false);
-        }
-
         static bool IsJobPath(string path, out string jobId, out string action)
         {
             jobId = null;
@@ -561,23 +534,6 @@ namespace SteamDl.Core
             resp.ContentLength64 = payload.Length;
             await resp.OutputStream.WriteAsync(payload).ConfigureAwait(false);
             resp.Close();
-        }
-
-        static string ContentType(string path)
-        {
-            var ext = Path.GetExtension(path).ToLowerInvariant();
-            return ext switch
-            {
-                ".html" => "text/html; charset=utf-8",
-                ".js" => "text/javascript; charset=utf-8",
-                ".css" => "text/css; charset=utf-8",
-                ".json" => "application/json; charset=utf-8",
-                ".svg" => "image/svg+xml",
-                ".png" => "image/png",
-                ".jpg" or ".jpeg" => "image/jpeg",
-                ".ico" => "image/x-icon",
-                _ => "application/octet-stream",
-            };
         }
     }
 }

@@ -1,0 +1,76 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace = "app.steamdl"
+    compileSdk = 35
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    defaultConfig {
+        applicationId = "app.steamdl"
+        minSdk = 26
+        // targetSdk 固定 28:
+        // .NET linux-bionic 单文件引擎启动时会把原生库解包到应用数据目录再
+        // dlopen/exec,Android 10+(targetSdk>=29)禁止从可写目录执行,
+        // 自用侧载包降 targetSdk 保持 legacy 行为;同时获得 legacy 外置存储
+        // (WRITE_EXTERNAL_STORAGE 即可写 /sdcard/Download,无需 MANAGE_EXTERNAL_STORAGE)。
+        targetSdk = 28
+        versionCode = 2
+        versionName = "2.0"
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+
+    signingConfigs {
+        release {
+            def keystorePath = System.getenv("ANDROID_KEYSTORE")
+            if (keystorePath != null && !keystorePath.isEmpty()) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ANDROID_STORE_PASS")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "steamdl"
+                keyPassword = System.getenv("ANDROID_KEY_PASS") ?: System.getenv("ANDROID_STORE_PASS")
+            }
+        }
+    }
+
+    buildTypes {
+        def hasReleaseKeystore = { ->
+            def keystorePath = System.getenv("ANDROID_KEYSTORE")
+            return keystorePath != null && !keystorePath.isEmpty()
+        }
+        release {
+            signingConfig = hasReleaseKeystore() ? signingConfigs.release : signingConfigs.debug
+        }
+        debug {
+            if (hasReleaseKeystore()) {
+                signingConfig = signingConfigs.release
+            }
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            // 引擎/openssl 以 lib*.so 形式打进 APK,必须解包到 nativeLibraryDir
+            // 才能被前台服务 exec(等价 extractNativeLibs=true)
+            useLegacyPackaging = true
+            // .NET 单文件引擎不是标准 ELF 依赖闭包,跳过 strip 与依赖检查
+            keepDebugSymbols += "**/libsteamdl_engine.so"
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}

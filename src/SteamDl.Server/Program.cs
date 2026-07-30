@@ -1,113 +1,50 @@
-// 桌面/服务器入口:PC 或 Linux 上直接运行同一套下载服务
-// 用法: dotnet run --project src/SteamDl.Server  (环境变量 PORT 可改端口)
+// SteamDl 引擎 sidecar 入口:被 Flutter 原生 UI 以子进程方式拉起,
+// 通过 127.0.0.1 HTTP(/api 契约)提供登录/游戏库/下载任务能力。
+// 同一份二进制用于:
+//   - Windows/Linux 桌面(win-x64/linux-x64 自包含单文件)
+//   - Android(linux-bionic-arm64 自包含单文件,由前台服务从 nativeLibraryDir 执行)
+// 环境变量: PORT(默认 8630)、STEAMDL_BIND_HOST(默认 127.0.0.1)、
+//           STEAMDL_DATA_DIR(数据目录)、STEAMDL_SIDECAR=1(stdin EOF 时自动退出)
 using System;
-using System.Diagnostics;
-using System.IO;
-using System.Runtime.InteropServices;
 using SteamDl.Core;
 
 var port = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var p) ? p : 8630;
+var host = Environment.GetEnvironmentVariable("STEAMDL_BIND_HOST");
+if (string.IsNullOrWhiteSpace(host)) host = "127.0.0.1";
 
 // 先保留原始 stdout 用于服务日志,再接管 Console 给下载引擎
 ConsoleRelay.Instance.Install(passthroughToStdout: true);
-_ = JobManager.Instance; // 触发事件接线
+_ = JobManager.Instance; // 触发事件接线 + 恢复中断任务
 
-var picker = CreatePickDirectoryHandler();
-if (picker != null) WebApi.PickDirectoryHandler = picker;
-
-var api = new WebApi(port);
+var api = new WebApi(port, host);
 api.Start();
 
 Console.Out.Flush();
-var banner = $"* Steam Depot Web Downloader (C#): http://127.0.0.1:{port}";
-Console.WriteLine(banner);
+Console.WriteLine($"* SteamDl engine sidecar: http://{host}:{port}");
+
+if (Environment.GetEnvironmentVariable("STEAMDL_SIDECAR") == "1")
+{
+    // sidecar 模式:父进程(Flutter)退出会关闭管道,stdin 读到 EOF 即自杀,
+    // 避免 UI 崩溃/被强杀后留下孤儿引擎进程占用端口。
+    // 注意必须用 OpenStandardInput:Console.In 已被 ConsoleRelay 接管。
+    using var stdin = Console.OpenStandardInput();
+    var buffer = new byte[256];
+    while (true)
+    {
+        int read;
+        try
+        {
+            read = stdin.Read(buffer, 0, buffer.Length);
+        }
+        catch
+        {
+            break;
+        }
+        if (read <= 0) break;
+    }
+    api.Stop();
+    return;
+}
 
 // 常驻直到进程被终止
 System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite);
-
-static Func<string> CreatePickDirectoryHandler()
-{
-    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (FindCommand("powershell") != null || FindCommand("pwsh") != null))
-    {
-        return PickWindowsDirectory;
-    }
-
-    if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && FindCommand("osascript") != null)
-    {
-        return PickMacDirectory;
-    }
-
-    if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-    {
-        if (FindCommand("zenity") != null) return PickLinuxZenityDirectory;
-        if (FindCommand("kdialog") != null) return PickLinuxKdialogDirectory;
-    }
-
-    return null;
-}
-
-static string PickWindowsDirectory()
-{
-    var ps = FindCommand("powershell") ?? FindCommand("pwsh");
-    var script = "Add-Type -AssemblyName System.Windows.Forms; " +
-                 "$d = New-Object System.Windows.Forms.FolderBrowserDialog; " +
-                 "$d.Description = '选择 SteamDl 保存目录'; " +
-                 "$d.ShowNewFolderButton = $true; " +
-                 "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Write($d.SelectedPath) }";
-    return RunCapture(ps, "-NoProfile", "-STA", "-Command", script);
-}
-
-static string PickMacDirectory()
-{
-    return RunCapture("osascript", "-e", "POSIX path of (choose folder with prompt \"选择 SteamDl 保存目录\")")?.TrimEnd(Path.DirectorySeparatorChar, '/');
-}
-
-static string PickLinuxZenityDirectory()
-{
-    return RunCapture("zenity", "--file-selection", "--directory", "--title=选择 SteamDl 保存目录");
-}
-
-static string PickLinuxKdialogDirectory()
-{
-    return RunCapture("kdialog", "--getexistingdirectory", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "选择 SteamDl 保存目录");
-}
-
-static string RunCapture(string command, params string[] args)
-{
-    try
-    {
-        using var process = Process.Start(new ProcessStartInfo(command, args)
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        });
-        if (process == null) return null;
-        var output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
-        var path = output.Trim();
-        return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(path) ? path : null;
-    }
-    catch
-    {
-        return null;
-    }
-}
-
-static string FindCommand(string name)
-{
-    var paths = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-    var names = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-        ? new[] { name, name + ".exe", name + ".cmd", name + ".bat" }
-        : new[] { name };
-    foreach (var dir in paths)
-    {
-        foreach (var candidate in names)
-        {
-            var full = Path.Combine(dir, candidate);
-            if (File.Exists(full)) return full;
-        }
-    }
-    return null;
-}

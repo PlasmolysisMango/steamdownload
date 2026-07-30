@@ -4,6 +4,12 @@
     <TargetFramework>net9.0</TargetFramework>
     <RollForward>LatestMajor</RollForward>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>steamdl-engine</AssemblyName>
+    <!-- sidecar 发布目标:win-x64/linux-x64/linux-bionic-arm64(Android),
+         由 CI 传 -r 与 -p:PublishSingleFile=true 控制 -->
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-x64;linux-bionic-arm64</RuntimeIdentifiers>
+    <!-- SteamKit2/protobuf-net 依赖反射,禁用裁剪保证 Release 单文件可用 -->
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
   <ItemGroup>

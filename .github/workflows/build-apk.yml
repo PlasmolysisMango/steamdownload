@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build SteamDl (Flutter + .NET engine)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         options: [Release, Debug]
         default: Release
       release_tag:
-        description: "发布到 Release 的 tag 名（留空=不发布；若在某个 tag 的 ref 上手动触发可留空，会自动用该 tag）"
+        description: "发布到 Release 的 tag 名（留空=不发布）"
         type: string
         default: ""
   push:
@@ -19,7 +19,6 @@ on:
     paths:
       - "src/**"
       - "external/**"
-      - "build.mjs"
       - ".github/workflows/build-apk.yml"
 
 # 同一分支/PR 只保留最新一次构建，取消排队中的旧任务
@@ -30,19 +29,64 @@ concurrency:
 permissions:
   contents: write # release 任务需要创建/更新 GitHub Release 并上传附件
 
+env:
+  FLUTTER_VERSION: "3.29.3"
+  # develop 分支提交固定构建 Debug APK；tag 推送和手动默认构建 Release
+  CONFIG: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == 'develop')) && 'Debug' || (inputs.config || 'Release') }}
+
 jobs:
+  # .NET 引擎 sidecar，Android 版（linux-bionic-arm64 自包含单文件）
+  build-engine-bionic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-bionic-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-bionic-
+
+      - name: Publish engine (linux-bionic-arm64)
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+        run: |
+          dotnet publish src/SteamDl.Server/SteamDl.Server.csproj \
+            -c Release \
+            -r linux-bionic-arm64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:EnableCompressionInSingleFile=true \
+            -o artifacts/engine-bionic
+          ls -lh artifacts/engine-bionic
+
+      - name: Upload engine artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-bionic-${{ github.sha }}
+          path: artifacts/engine-bionic/steamdl-engine
+          if-no-files-found: error
+          retention-days: 3
+
+  # Flutter APK（引擎与 OpenSSL 以 jniLibs 注入）
   build-apk:
     runs-on: ubuntu-latest
-    env:
-      # fork PR 通常拿不到 secrets；只要当前事件能读取到 keystore Secret，Debug/Release 都使用同一份签名
-      # develop 分支提交固定构建 Debug APK；tag 推送和手动默认仍构建 Release
-      CONFIG: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == 'develop')) && 'Debug' || (inputs.config || 'Release') }}
-      HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    needs: build-engine-bionic
     outputs:
       config: ${{ steps.resolve-config.outputs.config }}
       artifact-name: ${{ steps.resolve-config.outputs.artifact-name }}
       apk-name: ${{ steps.resolve-config.outputs.apk-name }}
-
+    env:
+      HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Resolve config
         id: resolve-config
@@ -54,13 +98,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: src/SteamDl.Web/package-lock.json
-
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -70,18 +107,38 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
-          dotnet-version: "9.0.x"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
 
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
+      - name: Download engine artifact
+        uses: actions/download-artifact@v4
         with:
-          path: .tools/nuget
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
+          name: engine-bionic-${{ github.sha }}
+          path: engine-download
+
+      - name: Assemble jniLibs (engine + OpenSSL) and assets (cacert)
+        run: |
+          set -euo pipefail
+          JNI=src/steamdl_app/android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$JNI"
+          # .NET 引擎单文件 → 伪装成 lib*.so 打入 APK，解包后由前台服务 exec
+          cp engine-download/steamdl-engine "$JNI/libsteamdl_engine.so"
+          chmod +x "$JNI/libsteamdl_engine.so"
+          # OpenSSL 3(bionic 预编译, KDAB/android_openssl, Apache-2.0)
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libssl_3.so \
+            -o "$JNI/libssl_3.so"
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libcrypto_3.so \
+            -o "$JNI/libcrypto_3.so"
+          # Mozilla CA 证书包，供引擎 SSL_CERT_FILE 使用
+          curl -fsSL --retry 3 https://curl.se/ca/cacert.pem \
+            -o src/steamdl_app/assets/cacert.pem
+          ls -lh "$JNI" src/steamdl_app/assets
 
       - name: Prepare signing keystore
         if: env.HAS_RELEASE_KEYSTORE == 'true'
@@ -96,7 +153,7 @@ jobs:
 
           raw = (os.environ.get('ANDROID_KEYSTORE_BASE64') or '').strip()
           if raw.startswith('ANDROID_KEYSTORE_BASE64=') or '\nANDROID_KEYSTORE_BASE64=' in raw:
-              print('::error::ANDROID_KEYSTORE_BASE64 Secret 填写错误：Secret Name 应为 ANDROID_KEYSTORE_BASE64，Secret Value 只能填写等号右侧的 base64 内容，不要包含 ANDROID_KEYSTORE_BASE64= 前缀。')
+              print('::error::ANDROID_KEYSTORE_BASE64 Secret 填写错误：Secret Value 只能填写等号右侧的 base64 内容。')
               sys.exit(1)
           raw = raw.strip('"\'')
           compact = ''.join(raw.split())
@@ -106,48 +163,50 @@ jobs:
           try:
               data = base64.b64decode(compact, validate=True)
           except Exception:
-              print('::error::ANDROID_KEYSTORE_BASE64 不是有效 base64。请只填写 github-actions-secrets.env 中 ANDROID_KEYSTORE_BASE64= 右侧的值；不要包含空格或截断。')
+              print('::error::ANDROID_KEYSTORE_BASE64 不是有效 base64。')
               sys.exit(1)
           if len(data) < 512:
-              print('::error::解码后的 keystore 过小，Secret 可能被截断或复制错误')
+              print('::error::解码后的 keystore 过小，Secret 可能被截断')
               sys.exit(1)
           with open('.tools/keystore/steamdl-release.keystore', 'wb') as f:
               f.write(data)
           print(f'Keystore restored: {len(data)} bytes')
           PY
 
+      - name: Bootstrap gradle wrapper
+        working-directory: src/steamdl_app/android
+        run: |
+          echo "flutter.sdk=$FLUTTER_ROOT" > local.properties
+          echo "sdk.dir=$ANDROID_HOME" >> local.properties
+          gradle wrapper --gradle-version 8.10.2 --no-daemon
+
+      - name: Flutter analyze
+        working-directory: src/steamdl_app
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos
+
       - name: Build APK
+        working-directory: src/steamdl_app
         env:
           ANDROID_KEYSTORE: ${{ env.HAS_RELEASE_KEYSTORE == 'true' && format('{0}/.tools/keystore/steamdl-release.keystore', github.workspace) || '' }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_STORE_PASS: ${{ secrets.ANDROID_STORE_PASS }}
           ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
         run: |
-          node build.mjs build-apk \
-            --config=${{ env.CONFIG }} \
-            --nuget-source=https://api.nuget.org/v3/index.json \
-            --npm-registry=https://registry.npmjs.org
+          if [ "${{ env.CONFIG }}" = "Debug" ]; then
+            flutter build apk --debug
+            cp build/app/outputs/flutter-apk/app-debug.apk /tmp/steamdl.apk
+          else
+            flutter build apk --release
+            cp build/app/outputs/flutter-apk/app-release.apk /tmp/steamdl.apk
+          fi
 
       - name: Prepare direct APK file
         run: |
           mkdir -p artifacts/direct
-          python3 - <<'PY'
-          import glob
-          import os
-          import shutil
-          import sys
-
-          apk_name = '${{ steps.resolve-config.outputs.apk-name }}'
-          apks = sorted(glob.glob('artifacts/apk/*.apk'))
-          signed = [p for p in apks if p.lower().endswith('-signed.apk')]
-          selected = signed[0] if signed else (apks[0] if apks else None)
-          if not selected:
-              print('::error::未找到 APK 产物')
-              sys.exit(1)
-          target = os.path.join('artifacts', 'direct', apk_name)
-          shutil.copyfile(selected, target)
-          print(f'Direct APK: {target}')
-          PY
+          cp /tmp/steamdl.apk "artifacts/direct/${{ steps.resolve-config.outputs.apk-name }}"
+          ls -lh artifacts/direct
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -158,10 +217,82 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  # Windows 桌面（Flutter Windows + win-x64 引擎 sidecar 同包）
+  build-windows:
+    runs-on: windows-latest
+    outputs:
+      artifact-name: ${{ steps.meta.outputs.artifact-name }}
+      zip-name: ${{ steps.meta.outputs.zip-name }}
+    steps:
+      - name: Resolve meta
+        id: meta
+        shell: bash
+        run: |
+          echo "artifact-name=steamdl-windows-${{ env.CONFIG }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "zip-name=SteamDl-Windows-x64.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Publish engine (win-x64)
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+        run: |
+          dotnet publish src/SteamDl.Server/SteamDl.Server.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:EnableCompressionInSingleFile=true `
+            -o artifacts/engine-win
+
+      - name: Generate Windows runner scaffold
+        working-directory: src/steamdl_app
+        run: |
+          flutter config --enable-windows-desktop
+          flutter create --platforms=windows --project-name steamdl_app .
+
+      - name: Build Flutter Windows
+        working-directory: src/steamdl_app
+        run: |
+          flutter pub get
+          flutter build windows --release
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=artifacts/windows/SteamDl
+          mkdir -p "$OUT/engine"
+          cp -r src/steamdl_app/build/windows/x64/runner/Release/. "$OUT/"
+          cp artifacts/engine-win/steamdl-engine.exe "$OUT/engine/steamdl-engine.exe"
+          cd artifacts/windows
+          7z a "../${{ steps.meta.outputs.zip-name }}" SteamDl
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact-name }}
+          path: artifacts/${{ steps.meta.outputs.zip-name }}
+          if-no-files-found: error
+          retention-days: 14
+
   release:
-    needs: build-apk
+    needs: [build-apk, build-windows]
     runs-on: ubuntu-latest
-    # 仅当推送了 tag，或手动触发时显式填写了 release_tag 时，才发布到 GitHub Release（PR 不发布）
+    # 仅当推送了 tag，或手动触发时显式填写了 release_tag 时，才发布（PR 不发布）
     if: github.event_name != 'pull_request' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     steps:
       - name: Resolve release tag
@@ -179,6 +310,12 @@ jobs:
           name: ${{ needs.build-apk.outputs.artifact-name }}
           path: dist
 
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-windows.outputs.artifact-name }}
+          path: dist
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -187,15 +324,15 @@ jobs:
           CONFIG: ${{ needs.build-apk.outputs.config }}
           SHA: ${{ github.sha }}
         run: |
-          mapfile -t apks < <(find dist -type f -name '*.apk' | sort)
-          if [ "${#apks[@]}" -eq 0 ]; then
-            echo "::error::未找到可发布的 APK 文件"
+          mapfile -t files < <(find dist -type f \( -name '*.apk' -o -name '*.zip' \) | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::未找到可发布的产物"
             exit 1
           fi
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${apks[@]}" --clobber --repo "$REPO"
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "$REPO"
           else
-            gh release create "$TAG" "${apks[@]}" \
+            gh release create "$TAG" "${files[@]}" \
               --title "$TAG" \
               --notes "自动构建（CONFIG=$CONFIG, commit=$SHA）" \
               --repo "$REPO"

@@ -1,0 +1,24 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+
+# Android
+android/.gradle/
+android/local.properties
+android/gradlew
+android/gradlew.bat
+android/gradle/wrapper/gradle-wrapper.jar
+android/app/.cxx/
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+
+# CI 注入的运行时产物(引擎 sidecar/OpenSSL/CA 证书)
+android/app/src/main/jniLibs/
+assets/cacert.pem
+
+# 桌面构建
+windows/flutter/ephemeral/
+linux/flutter/ephemeral/
