@@ -186,8 +186,18 @@ jobs:
       - name: Flutter analyze
         working-directory: src/steamdl_app
         run: |
-          flutter pub get
-          flutter analyze --no-fatal-infos
+          set -o pipefail
+          flutter pub get 2>&1 | tee /tmp/analyze.log
+          flutter analyze --no-fatal-infos 2>&1 | tee -a /tmp/analyze.log
+
+      - name: Upload analyze log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyze-log-${{ github.sha }}
+          path: /tmp/analyze.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Build APK
         working-directory: src/steamdl_app

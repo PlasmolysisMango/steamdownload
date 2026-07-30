@@ -279,7 +279,9 @@ class _LibraryPageState extends State<LibraryPage> {
           for (final entry in options.entries)
             DropdownMenuItem(value: entry.key, child: Text(entry.value)),
         ],
-        onChanged: (v) => v != null ? onChanged(v) : null,
+        onChanged: (v) {
+          if (v != null) onChanged(v);
+        },
       ),
     );
   }
