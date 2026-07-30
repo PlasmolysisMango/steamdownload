@@ -173,12 +173,15 @@ jobs:
           print(f'Keystore restored: {len(data)} bytes')
           PY
 
-      - name: Bootstrap gradle wrapper
-        working-directory: src/steamdl_app/android
+      - name: Bootstrap gradle wrapper (from Flutter cache)
         run: |
-          echo "flutter.sdk=$FLUTTER_ROOT" > local.properties
-          echo "sdk.dir=$ANDROID_HOME" >> local.properties
-          gradle wrapper --gradle-version 8.10.2 --no-daemon
+          set -euo pipefail
+          # 不使用 runner 系统 Gradle(版本过新与 AGP 不兼容)，
+          # 复用 Flutter SDK 缓存的 wrapper；-n 保留仓库内钉住的 gradle-wrapper.properties
+          flutter precache --android
+          cp -rn "$FLUTTER_ROOT/bin/cache/artifacts/gradle_wrapper/." src/steamdl_app/android/
+          chmod +x src/steamdl_app/android/gradlew
+          ls -la src/steamdl_app/android
 
       - name: Flutter analyze
         working-directory: src/steamdl_app
