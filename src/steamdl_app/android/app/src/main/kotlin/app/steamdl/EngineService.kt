@@ -70,7 +70,7 @@ class EngineService : Service() {
     private fun startSupervisor() {
         if (supervising) return
         supervising = true
-        Thread {
+        Thread({
             while (supervising) {
                 try {
                     if (process?.isAlive != true) {
@@ -131,7 +131,7 @@ class EngineService : Service() {
         engineStdin = proc.outputStream
 
         // 引擎日志转发到 logcat
-        Thread {
+        Thread({
             try {
                 proc.inputStream.bufferedReader().forEachLine { line ->
                     Log.i(TAG, line)

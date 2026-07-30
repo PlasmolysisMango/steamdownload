@@ -242,7 +242,7 @@ jobs:
 
   # Windows 桌面（Flutter Windows + win-x64 引擎 sidecar 同包）
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     outputs:
       artifact-name: ${{ steps.meta.outputs.artifact-name }}
       zip-name: ${{ steps.meta.outputs.zip-name }}
