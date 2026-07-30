@@ -58,6 +58,7 @@ class _JobsPageState extends State<JobsPage> {
   Future<void> _confirmDelete({Job? job}) async {
     final isAll = job == null;
     if (isAll && state.jobs.isEmpty) return;
+    final title = job?.displayTitle ?? '';
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -68,7 +69,7 @@ class _JobsPageState extends State<JobsPage> {
           children: [
             Text(isAll
                 ? '要删除全部 ${state.jobs.length} 个任务记录吗？'
-                : '要删除任务"${job.displayTitle}"吗？'),
+                : '要删除任务"$title"吗？'),
             const SizedBox(height: 8),
             const Text(
               '请选择删除方式。删除文件会同时删除任务对应的下载目录。',
@@ -93,7 +94,7 @@ class _JobsPageState extends State<JobsPage> {
     );
     if (result == null) return;
     final deleteFiles = result == 'files';
-    if (isAll) {
+    if (job == null) {
       await state.deleteAllJobs(deleteFiles: deleteFiles);
     } else {
       await state.deleteJob(job, deleteFiles: deleteFiles);

@@ -226,7 +226,7 @@ class _LibraryPageState extends State<LibraryPage> {
         else if (_gridView)
           LayoutBuilder(
             builder: (context, constraints) {
-              final columns = (constraints.maxWidth / 320).floor().clamp(1, 4);
+              final columns = (constraints.maxWidth / 320).floor().clamp(1, 4).toInt();
               return GridView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
