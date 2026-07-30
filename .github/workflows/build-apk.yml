@@ -207,13 +207,23 @@ jobs:
           ANDROID_STORE_PASS: ${{ secrets.ANDROID_STORE_PASS }}
           ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
         run: |
+          set -o pipefail
           if [ "${{ env.CONFIG }}" = "Debug" ]; then
-            flutter build apk --debug
+            flutter build apk --debug --verbose 2>&1 | tail -300 | tee /tmp/apk-build.log
             cp build/app/outputs/flutter-apk/app-debug.apk /tmp/steamdl.apk
           else
-            flutter build apk --release
+            flutter build apk --release --verbose 2>&1 | tail -300 | tee /tmp/apk-build.log
             cp build/app/outputs/flutter-apk/app-release.apk /tmp/steamdl.apk
           fi
+
+      - name: Upload APK build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-build-log-${{ github.sha }}
+          path: /tmp/apk-build.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Prepare direct APK file
         run: |
@@ -279,9 +289,20 @@ jobs:
 
       - name: Build Flutter Windows
         working-directory: src/steamdl_app
+        shell: bash
         run: |
-          flutter pub get
-          flutter build windows --release
+          set -o pipefail
+          flutter pub get 2>&1 | tee ../../win-build.log
+          flutter build windows --release --verbose 2>&1 | tail -300 | tee -a ../../win-build.log
+
+      - name: Upload Windows build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-build-log-${{ github.sha }}
+          path: win-build.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Package
         shell: bash
