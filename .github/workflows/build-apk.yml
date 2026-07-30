@@ -120,7 +120,7 @@ jobs:
           name: engine-bionic-${{ github.sha }}
           path: engine-download
 
-      - name: Assemble jniLibs (engine + OpenSSL) and assets (cacert)
+      - name: Assemble jniLibs (engine + SQLite + OpenSSL) and assets (cacert)
         run: |
           set -euo pipefail
           JNI=src/steamdl_app/android/app/src/main/jniLibs/arm64-v8a
@@ -128,6 +128,23 @@ jobs:
           # .NET 引擎单文件 → 伪装成 lib*.so 打入 APK，解包后由前台服务 exec
           cp engine-download/steamdl-engine "$JNI/libsteamdl_engine.so"
           chmod +x "$JNI/libsteamdl_engine.so"
+          # SQLitePCLRaw 的 native SQLite 库；JobStore 初始化需要 dlopen libe_sqlite3.so
+          curl -fsSL --retry 3 \
+            https://www.nuget.org/api/v2/package/SQLitePCLRaw.lib.e_sqlite3.android/2.1.10 \
+            -o /tmp/sqlite-android.nupkg
+          python3 - <<'PY'
+          import zipfile
+          nupkg = '/tmp/sqlite-android.nupkg'
+          aar = '/tmp/SQLitePCLRaw.lib.e_sqlite3.android.aar'
+          with zipfile.ZipFile(nupkg) as z:
+              data = z.read('lib/net6.0-android31.0/SQLitePCLRaw.lib.e_sqlite3.android.aar')
+          with open(aar, 'wb') as f:
+              f.write(data)
+          with zipfile.ZipFile(aar) as z:
+              data = z.read('jni/arm64-v8a/libe_sqlite3.so')
+          with open('src/steamdl_app/android/app/src/main/jniLibs/arm64-v8a/libe_sqlite3.so', 'wb') as f:
+              f.write(data)
+          PY
           # OpenSSL 3(bionic 预编译, KDAB/android_openssl, Apache-2.0)
           curl -fsSL --retry 3 \
             https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libssl_3.so \
@@ -280,6 +297,10 @@ jobs:
             -p:PublishSingleFile=true `
             -p:EnableCompressionInSingleFile=true `
             -o artifacts/engine-win
+          $sqlite = Join-Path $env:USERPROFILE ".nuget\packages\sqlitepclraw.lib.e_sqlite3\2.1.10\runtimes\win-x64\native\e_sqlite3.dll"
+          if (!(Test-Path $sqlite)) { throw "Missing SQLite native library: $sqlite" }
+          Copy-Item $sqlite artifacts/engine-win/e_sqlite3.dll -Force
+          Get-ChildItem artifacts/engine-win | Format-Table Name,Length
 
       - name: Generate Windows runner scaffold
         working-directory: src/steamdl_app
@@ -311,7 +332,7 @@ jobs:
           OUT=artifacts/windows/SteamDl
           mkdir -p "$OUT/engine"
           cp -r src/steamdl_app/build/windows/x64/runner/Release/. "$OUT/"
-          cp artifacts/engine-win/steamdl-engine.exe "$OUT/engine/steamdl-engine.exe"
+          cp -r artifacts/engine-win/. "$OUT/engine/"
           cd artifacts/windows
           7z a "../${{ steps.meta.outputs.zip-name }}" SteamDl
 

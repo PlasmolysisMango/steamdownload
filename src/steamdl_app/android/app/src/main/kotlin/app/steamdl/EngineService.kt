@@ -97,6 +97,7 @@ class EngineService : Service() {
 
     private fun launchEngine() {
         val nativeDir = applicationInfo.nativeLibraryDir
+        logNativeLibraryState(nativeDir)
         val engine = File(nativeDir, "libsteamdl_engine.so")
         if (!engine.exists()) {
             throw IllegalStateException("engine binary missing: $engine")
@@ -139,6 +140,23 @@ class EngineService : Service() {
             } catch (_: Exception) {
             }
         }, "steamdl-engine-log").start()
+    }
+
+    /** 记录关键 native 依赖是否随 APK 解包到 nativeLibraryDir。 */
+    private fun logNativeLibraryState(nativeDir: String) {
+        for (name in listOf(
+            "libsteamdl_engine.so",
+            "libe_sqlite3.so",
+            "libssl_3.so",
+            "libcrypto_3.so",
+        )) {
+            val file = File(nativeDir, name)
+            if (file.exists()) {
+                Log.i(TAG, "native lib ok: ${file.absolutePath} (${file.length()} bytes)")
+            } else {
+                Log.e(TAG, "native lib missing: ${file.absolutePath}")
+            }
+        }
     }
 
     /** 为 .NET opensslshim 准备版本化命名的 OpenSSL 符号链接。 */
