@@ -23,8 +23,12 @@ class ApiClient {
 
   ApiClient({this.host = '127.0.0.1', this.port = 8630});
 
-  Uri _uri(String path, [Map<String, String>? query]) =>
-      Uri(scheme: 'http', host: host, port: port, path: path, queryParameters: query);
+  Uri _uri(String path, [Map<String, String>? query]) => Uri(
+      scheme: 'http',
+      host: host,
+      port: port,
+      path: path,
+      queryParameters: query);
 
   Future<Map<String, dynamic>> _request(
     String method,
@@ -33,7 +37,8 @@ class ApiClient {
     Map<String, String>? query,
     Duration timeout = const Duration(seconds: 20),
   }) async {
-    final req = await _client.openUrl(method, _uri(path, query)).timeout(timeout);
+    final req =
+        await _client.openUrl(method, _uri(path, query)).timeout(timeout);
     if (body != null) {
       req.headers.contentType = ContentType.json;
       req.add(utf8.encode(jsonEncode(body)));
@@ -50,8 +55,8 @@ class ApiClient {
       }
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw ApiException(
-          res.statusCode, (data['error'] as String?) ?? 'HTTP ${res.statusCode}');
+      throw ApiException(res.statusCode,
+          (data['error'] as String?) ?? 'HTTP ${res.statusCode}');
     }
     return data;
   }
@@ -63,7 +68,8 @@ class ApiClient {
   }) =>
       _request('GET', path, query: query, timeout: timeout);
 
-  Future<Map<String, dynamic>> _post(String path, [Map<String, dynamic>? body]) =>
+  Future<Map<String, dynamic>> _post(String path,
+          [Map<String, dynamic>? body]) =>
       _request('POST', path, body: body ?? const {});
 
   // ---- 健康检查 ----
@@ -83,7 +89,8 @@ class ApiClient {
 
   // ---- 账号 ----
 
-  Future<(List<String>, List<AccountDetail>, LoginState, String)> accounts() async {
+  Future<(List<String>, List<AccountDetail>, LoginState, String)>
+      accounts() async {
     final data = await _get('/api/accounts');
     final names = ((data['accounts'] as List?) ?? const [])
         .map((x) => x.toString())
@@ -98,7 +105,8 @@ class ApiClient {
     return (names, details, login, (data['selected_account'] ?? '').toString());
   }
 
-  Future<LoginState> login(String username, String password, bool rememberPassword) async {
+  Future<LoginState> login(
+      String username, String password, bool rememberPassword) async {
     final data = await _post('/api/accounts/login', {
       'username': username,
       'password': password,
@@ -142,11 +150,13 @@ class ApiClient {
   // ---- 游戏库 ----
 
   Future<LibraryStatus> libraryStatus(String username) async {
-    final data = await _get('/api/library/status', query: {'username': username});
+    final data =
+        await _get('/api/library/status', query: {'username': username});
     return LibraryStatus.fromJson(data);
   }
 
-  Future<LibraryStatus> librarySync(String username, {required bool full}) async {
+  Future<LibraryStatus> librarySync(String username,
+      {required bool full}) async {
     final data = await _post('/api/library/sync', {
       'username': username,
       'mode': full ? 'full' : 'incremental',
@@ -206,7 +216,8 @@ class ApiClient {
       _post('/api/jobs/$jobId/input', {'answer': answer});
 
   Future<void> deleteJob(String jobId, {required bool deleteFiles}) =>
-      _request('DELETE', '/api/jobs/$jobId', body: {'delete_files': deleteFiles});
+      _request('DELETE', '/api/jobs/$jobId',
+          body: {'delete_files': deleteFiles});
 
   Future<void> deleteAllJobs({required bool deleteFiles}) =>
       _request('DELETE', '/api/jobs', body: {'delete_files': deleteFiles});

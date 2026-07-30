@@ -1,16 +1,14 @@
-// 设置页:默认下载目录/默认平台/最大线程/自动恢复 + 日志查看器。
+// 设置页：默认下载目录/默认平台/最大线程/自动恢复 + 日志查看器。
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 
-import '../app_state.dart';
-import '../app_theme.dart';
 import '../engine.dart';
 import '../models.dart';
+import '../state_controllers.dart';
+import '../common_widgets.dart';
 
 class SettingsPage extends StatefulWidget {
-  final AppState state;
-
-  const SettingsPage({super.key, required this.state});
+  const SettingsPage({super.key});
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -27,31 +25,14 @@ class _SettingsPageState extends State<SettingsPage> {
 
   static const _engineLogId = '__engine__';
 
-  AppState get state => widget.state;
-
-  @override
-  void initState() {
-    super.initState();
-    state.addListener(_onState);
-    _syncFromSettings();
-  }
-
   @override
   void dispose() {
-    state.removeListener(_onState);
     _downloadDir.dispose();
     _maxDownloads.dispose();
     super.dispose();
   }
 
-  void _onState() {
-    if (!mounted) return;
-    _syncFromSettings();
-    setState(() {});
-  }
-
-  void _syncFromSettings() {
-    final settings = state.settings;
+  void _syncFromSettings(AppSettings? settings) {
     if (settings == null || _dirty) return;
     if (!_initialized ||
         _downloadDir.text != settings.defaultDownloadDir ||
@@ -64,19 +45,19 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Future<void> _save() async {
-    final saved = await state.saveSettings(AppSettings(
+  Future<void> _save(SettingsController settings) async {
+    final current = settings.settings;
+    final saved = await settings.save(AppSettings(
       defaultDownloadDir: _downloadDir.text.trim(),
       defaultPlatformOs: _platformOs,
       maxDownloads: int.tryParse(_maxDownloads.text) ?? 8,
       autoResume: _autoResume,
+      selectedAccount: current?.selectedAccount ?? '',
     ));
-    if (saved != null) {
-      setState(() => _dirty = false);
-    }
+    if (saved != null && mounted) setState(() => _dirty = false);
   }
 
-  Future<void> _pickDirectory() async {
+  Future<void> _pickDirectory(UiController ui) async {
     try {
       final picked = await pickNativeDirectory();
       if (picked != null && picked.trim().isNotEmpty) {
@@ -86,222 +67,142 @@ class _SettingsPageState extends State<SettingsPage> {
         });
       }
     } catch (e) {
-      state.showToast('目录选择失败: $e');
+      ui.showToast('目录选择失败: $e');
     }
   }
 
-  String get _logText {
-    if (_logJobId == _engineLogId) return state.engineLog;
-    if (_logJobId.isNotEmpty && state.activeJob?.jobId == _logJobId) {
-      return state.activeJob?.log ?? '';
+  String _logText(AppController app, AuthController auth, JobsController jobs) {
+    if (_logJobId == _engineLogId) return app.engineLog;
+    if (_logJobId.isNotEmpty && jobs.activeJob?.jobId == _logJobId) {
+      return jobs.activeJob?.log ?? '';
     }
-    final activeLog = state.activeJob?.log ?? '';
+    final activeLog = jobs.activeJob?.log ?? '';
     if (activeLog.isNotEmpty) return activeLog;
-    return state.loginState.log;
+    return auth.loginState.log;
+  }
+
+  String? _logHint(
+      AppController app, AuthController auth, JobsController jobs) {
+    if (_logJobId == _engineLogId && app.engineLogPath.isNotEmpty) {
+      return '日志文件：${app.engineLogPath}';
+    }
+    if (jobs.activeJob != null) {
+      return '当前任务：${jobs.activeJob!.displayTitle} · ${stateText(jobs.activeJob!.state)}';
+    }
+    if (auth.loginState.state != 'idle') {
+      return '当前登录流程：${stateText(auth.loginState.state)}';
+    }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
-    final settings = state.settings;
+    final app = context.watch<AppController>();
+    final settings = context.watch<SettingsController>();
+    final auth = context.watch<AuthController>();
+    final jobs = context.watch<JobsController>();
+    final ui = context.read<UiController>();
+    final current = settings.settings;
+    _syncFromSettings(current);
+    final logText = _logText(app, auth, jobs);
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    return PageFrame(
       children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: settings == null
-                ? const Text('加载设置中…')
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('设置',
-                          style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _downloadDir,
-                              decoration: const InputDecoration(
-                                labelText: '默认下载目录',
-                                hintText:
-                                    '/storage/emulated/0/Download/steamdl',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              onChanged: (_) => _dirty = true,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          OutlinedButton(
-                              onPressed: _pickDirectory,
-                              child: const Text('选择')),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        value: _platformOs,
-                        decoration: const InputDecoration(
-                          labelText: '默认平台',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                              value: 'windows', child: Text('Windows')),
-                          DropdownMenuItem(value: 'linux', child: Text('Linux')),
-                          DropdownMenuItem(value: 'any', child: Text('全部平台')),
-                        ],
-                        onChanged: (v) {
-                          setState(() {
-                            _platformOs = v ?? 'windows';
-                            _dirty = true;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _maxDownloads,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: '最大下载线程',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        onChanged: (_) => _dirty = true,
-                      ),
-                      SwitchListTile(
-                        value: _autoResume,
-                        onChanged: (v) => setState(() {
-                          _autoResume = v;
-                          _dirty = true;
-                        }),
-                        title: const Text('服务重启后自动恢复未完成任务',
-                            style: TextStyle(fontSize: 14)),
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                      ),
-                      FilledButton(
-                          onPressed: _save, child: const Text('保存设置')),
-                    ],
+        AppCard(
+          title: '设置',
+          children: [
+            if (current == null)
+              const Text('加载设置中…')
+            else ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _downloadDir,
+                      decoration: const InputDecoration(
+                          labelText: '默认下载目录',
+                          hintText: '/storage/emulated/0/Download/steamdl'),
+                      onChanged: (_) => _dirty = true,
+                    ),
                   ),
-          ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                      onPressed: () => _pickDirectory(ui),
+                      child: const Text('选择')),
+                ],
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _platformOs,
+                decoration: const InputDecoration(labelText: '默认平台'),
+                items: const [
+                  DropdownMenuItem(value: 'windows', child: Text('Windows')),
+                  DropdownMenuItem(value: 'linux', child: Text('Linux')),
+                  DropdownMenuItem(value: 'any', child: Text('全部平台')),
+                ],
+                onChanged: (v) {
+                  setState(() {
+                    _platformOs = v ?? 'windows';
+                    _dirty = true;
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _maxDownloads,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: '最大下载线程'),
+                onChanged: (_) => _dirty = true,
+              ),
+              SwitchListTile(
+                value: _autoResume,
+                onChanged: (v) => setState(() {
+                  _autoResume = v;
+                  _dirty = true;
+                }),
+                title: const Text('服务重启后自动恢复未完成任务',
+                    style: TextStyle(fontSize: 14)),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+              FilledButton(
+                  onPressed: () => _save(settings), child: const Text('保存设置')),
+            ],
+          ],
         ),
         const SizedBox(height: 16),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('日志',
-                          style: Theme.of(context).textTheme.titleMedium),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        await state.refreshDiagnostics();
-                        await state.refresh();
-                      },
-                      child: const Text('刷新'),
-                    ),
-                    TextButton(
-                      onPressed: _logText.isEmpty
-                          ? null
-                          : () async {
-                              await Clipboard.setData(
-                                  ClipboardData(text: _logText));
-                              state.showToast('日志已复制');
-                            },
-                      child: const Text('复制'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  value: _logJobId.isNotEmpty &&
-                          (_logJobId == _engineLogId ||
-                              state.jobs.any((j) => j.jobId == _logJobId))
-                      ? _logJobId
-                      : '',
-                  decoration: const InputDecoration(
-                    labelText: '选择日志',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: [
-                    const DropdownMenuItem(
-                        value: _engineLogId, child: Text('引擎诊断日志')),
-                    const DropdownMenuItem(
-                        value: '', child: Text('登录日志 / 当前任务')),
-                    for (final job in state.jobs)
-                      DropdownMenuItem(
-                        value: job.jobId,
-                        child: Text(
-                          '${job.displayTitle} · ${stateText(job.state)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                  onChanged: (v) async {
-                    _logJobId = v ?? '';
-                    if (_logJobId == _engineLogId) {
-                      await state.refreshDiagnostics();
-                    } else if (_logJobId.isNotEmpty) {
-                      await state.loadJobDetail(_logJobId);
-                    }
-                    setState(() {});
-                  },
-                ),
-                if (_logJobId == _engineLogId && state.engineLogPath.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  SelectableText(
-                    '日志文件：${state.engineLogPath}',
-                    style: const TextStyle(fontSize: 12, color: Colors.white70),
-                  ),
-                ] else if (state.activeJob != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    '当前任务：${state.activeJob!.displayTitle} · ${stateText(state.activeJob!.state)}',
-                    style:
-                        const TextStyle(fontSize: 12, color: Colors.white70),
-                  ),
-                ] else if (state.loginState.state != 'idle') ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    '当前登录流程：${stateText(state.loginState.state)}',
-                    style:
-                        const TextStyle(fontSize: 12, color: Colors.white70),
-                  ),
-                ],
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  constraints: const BoxConstraints(maxHeight: 360),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.35),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: SingleChildScrollView(
-                    child: SelectableText(
-                      _logText.isNotEmpty ? _logText : '暂无日志',
-                      style: const TextStyle(
-                        fontFamily: 'Cascadia Mono',
-                        fontFamilyFallback: AppTheme.monoFontFallback,
-                        fontSize: 11.5,
-                        height: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        LogViewer(
+          value: logText,
+          selected: _logJobId.isNotEmpty &&
+                  (_logJobId == _engineLogId ||
+                      jobs.jobs.any((j) => j.jobId == _logJobId))
+              ? _logJobId
+              : '',
+          hint: _logHint(app, auth, jobs),
+          items: [
+            const DropdownMenuItem(value: _engineLogId, child: Text('引擎诊断日志')),
+            const DropdownMenuItem(value: '', child: Text('登录日志 / 当前任务')),
+            for (final job in jobs.jobs)
+              DropdownMenuItem(
+                value: job.jobId,
+                child: Text('${job.displayTitle} · ${stateText(job.state)}',
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: (v) async {
+            _logJobId = v ?? '';
+            if (_logJobId == _engineLogId) {
+              await app.refreshDiagnostics();
+            } else if (_logJobId.isNotEmpty) {
+              await jobs.loadJobDetail(_logJobId);
+            }
+            if (mounted) setState(() {});
+          },
+          onRefresh: () async {
+            await app.refreshDiagnostics();
+            await app.refresh();
+          },
+          onCopy: () => copyText(context, logText, () => ui.showToast('日志已复制')),
         ),
       ],
     );

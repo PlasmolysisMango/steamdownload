@@ -109,7 +109,8 @@ class EngineController {
         }
       } else if (_lastExitCode != null) {
         final log = _lastOutput.trim();
-        throw StateError('引擎进程已退出(ExitCode=$_lastExitCode)${log.isEmpty ? '' : ': $log'}');
+        throw StateError(
+            '引擎进程已退出(ExitCode=$_lastExitCode)${log.isEmpty ? '' : ': $log'}');
       }
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
@@ -119,8 +120,8 @@ class EngineController {
 
   Future<Map<dynamic, dynamic>> _androidEngineStatus() async {
     try {
-      final status = await platformChannel.invokeMethod<Map<dynamic, dynamic>>(
-          'engineServiceStatus');
+      final status = await platformChannel
+          .invokeMethod<Map<dynamic, dynamic>>('engineServiceStatus');
       return status ?? const {};
     } catch (_) {
       return const {};

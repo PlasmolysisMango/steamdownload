@@ -1,14 +1,13 @@
-// 任务页:任务历史列表 + 详情(进度/等待输入/暂停继续取消重试) +
-// 长按删除单任务/删除全部,删除确认支持"仅记录/记录+文件"。
+// 任务页：任务历史列表 + 详情 + 暂停/继续/取消/重试/删除。
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-import '../app_state.dart';
 import '../models.dart';
+import '../state_controllers.dart';
+import '../common_widgets.dart';
 
 class JobsPage extends StatefulWidget {
-  final AppState state;
-
-  const JobsPage({super.key, required this.state});
+  const JobsPage({super.key});
 
   @override
   State<JobsPage> createState() => _JobsPageState();
@@ -17,26 +16,13 @@ class JobsPage extends StatefulWidget {
 class _JobsPageState extends State<JobsPage> {
   final _input = TextEditingController();
 
-  AppState get state => widget.state;
-
-  @override
-  void initState() {
-    super.initState();
-    state.addListener(_onState);
-  }
-
   @override
   void dispose() {
-    state.removeListener(_onState);
     _input.dispose();
     super.dispose();
   }
 
-  void _onState() {
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _confirmCancel(Job job) async {
+  Future<void> _confirmCancel(JobsController jobs, Job job) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -52,56 +38,29 @@ class _JobsPageState extends State<JobsPage> {
         ],
       ),
     );
-    if (ok == true) await state.jobAction(job, 'cancel');
+    if (ok == true) await jobs.action(job, 'cancel');
   }
 
-  Future<void> _confirmDelete({Job? job}) async {
+  Future<void> _confirmDelete(JobsController jobs, {Job? job}) async {
     final isAll = job == null;
-    if (isAll && state.jobs.isEmpty) return;
-    final title = job?.displayTitle ?? '';
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('确认删除'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(isAll
-                ? '要删除全部 ${state.jobs.length} 个任务记录吗？'
-                : '要删除任务"$title"吗？'),
-            const SizedBox(height: 8),
-            const Text(
-              '请选择删除方式。删除文件会同时删除任务对应的下载目录。',
-              style: TextStyle(fontSize: 12, color: Colors.white70),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消')),
-          OutlinedButton(
-              onPressed: () => Navigator.pop(context, 'record'),
-              child: const Text('仅删除记录')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, 'files'),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
-            child: const Text('删除记录和文件'),
-          ),
-        ],
-      ),
+    if (isAll && jobs.jobs.isEmpty) return;
+    final result = await confirmDeleteChoice(
+      context,
+      title: '确认删除',
+      message: isAll
+          ? '要删除全部 ${jobs.jobs.length} 个任务记录吗？'
+          : '要删除任务“${job.displayTitle}”吗？',
     );
     if (result == null) return;
     final deleteFiles = result == 'files';
     if (job == null) {
-      await state.deleteAllJobs(deleteFiles: deleteFiles);
+      await jobs.deleteAll(deleteFiles: deleteFiles);
     } else {
-      await state.deleteJob(job, deleteFiles: deleteFiles);
+      await jobs.deleteJob(job, deleteFiles: deleteFiles);
     }
   }
 
-  void _showJobMenu(Job job) {
+  void _showJobMenu(JobsController jobs, Job job) {
     showModalBottomSheet<void>(
       context: context,
       builder: (context) => SafeArea(
@@ -118,14 +77,13 @@ class _JobsPageState extends State<JobsPage> {
               title: const Text('删除任务'),
               onTap: () {
                 Navigator.pop(context);
-                _confirmDelete(job: job);
+                _confirmDelete(jobs, job: job);
               },
             ),
             ListTile(
-              leading: const Icon(Icons.close),
-              title: const Text('取消'),
-              onTap: () => Navigator.pop(context),
-            ),
+                leading: const Icon(Icons.close),
+                title: const Text('取消'),
+                onTap: () => Navigator.pop(context)),
           ],
         ),
       ),
@@ -134,183 +92,153 @@ class _JobsPageState extends State<JobsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final active = state.activeJob;
+    final jobs = context.watch<JobsController>();
+    final active = jobs.activeJob;
+    final wide = MediaQuery.of(context).size.width >= 900;
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    final list = AppCard(
+      title: '任务历史',
+      subtitle: '长按任务可删除单个任务。',
+      trailing: TextButton(
+        onPressed: jobs.jobs.isEmpty ? null : () => _confirmDelete(jobs),
+        style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+        child: const Text('删除全部'),
+      ),
       children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('任务历史',
-                          style: Theme.of(context).textTheme.titleMedium),
-                    ),
-                    TextButton(
-                      onPressed: state.jobs.isEmpty
-                          ? null
-                          : () => _confirmDelete(),
-                      style: TextButton.styleFrom(
-                          foregroundColor: Colors.redAccent),
-                      child: const Text('删除全部'),
-                    ),
-                  ],
-                ),
-                const Text('长按任务可删除单个任务。',
-                    style: TextStyle(fontSize: 12, color: Colors.white70)),
-                const SizedBox(height: 8),
-                if (state.jobs.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Text('暂无任务',
-                        style: TextStyle(color: Colors.white70)),
-                  ),
-                for (final job in state.jobs)
-                  Material(
-                    color: active?.jobId == job.jobId
-                        ? Theme.of(context).colorScheme.primaryContainer
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(8),
-                      onTap: () => state.loadJobDetail(job.jobId),
-                      onLongPress: () => _showJobMenu(job),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 8),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(job.displayTitle,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis),
-                            ),
-                            Text(
-                              '${stateText(job.state)} · ${job.percent.round()}%',
-                              style: const TextStyle(
-                                  fontSize: 12, color: Colors.white70),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
+        if (jobs.jobs.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Text('暂无任务', style: TextStyle(color: Colors.white70)),
           ),
+        for (final job in jobs.jobs)
+          JobTile(
+            job: job,
+            selected: active?.jobId == job.jobId,
+            onTap: () => jobs.loadJobDetail(job.jobId),
+            onLongPress: () => _showJobMenu(jobs, job),
+          ),
+      ],
+    );
+
+    final detail = _JobDetailCard(
+      job: active,
+      input: _input,
+      onInput: active == null
+          ? null
+          : () async {
+              await jobs.submitInput(active, _input.text);
+              _input.clear();
+            },
+      onPause: active == null ? null : () => jobs.action(active, 'pause'),
+      onResume: active == null ? null : () => jobs.action(active, 'resume'),
+      onCancel: active == null ? null : () => _confirmCancel(jobs, active),
+      onRetry: active == null ? null : () => jobs.action(active, 'retry'),
+      onDelete: active == null ? null : () => _confirmDelete(jobs, job: active),
+    );
+
+    if (wide) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: SingleChildScrollView(child: list)),
+            const SizedBox(width: 16),
+            Expanded(child: SingleChildScrollView(child: detail)),
+          ],
         ),
-        const SizedBox(height: 16),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: active == null
-                ? const Text('选择一个任务查看详情',
-                    style: TextStyle(color: Colors.white70))
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(active.displayTitle,
-                                style:
-                                    Theme.of(context).textTheme.titleMedium),
-                          ),
-                          Chip(
-                            label: Text(stateText(active.state),
-                                style: const TextStyle(fontSize: 11)),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      LinearProgressIndicator(
-                          value: (active.percent / 100).clamp(0.0, 1.0)),
-                      const SizedBox(height: 8),
-                      Text(
-                        active.progressText.isNotEmpty
-                            ? active.progressText
-                            : (active.error.isNotEmpty
-                                ? active.error
-                                : active.outputDir),
-                        style: const TextStyle(
-                            fontSize: 12, color: Colors.white70),
-                      ),
-                      if (active.state == 'waiting_input') ...[
-                        const SizedBox(height: 12),
-                        Text(active.prompt),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _input,
-                                obscureText: active.promptSecret,
-                                decoration: const InputDecoration(
-                                  border: OutlineInputBorder(),
-                                  isDense: true,
-                                ),
-                                onSubmitted: (_) => _sendInput(active),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            FilledButton(
-                                onPressed: () => _sendInput(active),
-                                child: const Text('提交')),
-                          ],
-                        ),
-                      ],
-                      const SizedBox(height: 4),
-                      const Text('详细日志请到"设置 - 日志"查看。',
-                          style: TextStyle(
-                              fontSize: 12, color: Colors.white70)),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          if (active.isActive)
-                            OutlinedButton(
-                              onPressed: () => state.jobAction(active, 'pause'),
-                              child: const Text('暂停'),
-                            ),
-                          if (active.state == 'paused')
-                            FilledButton(
-                              onPressed: () =>
-                                  state.jobAction(active, 'resume'),
-                              child: const Text('继续'),
-                            ),
-                          OutlinedButton(
-                            onPressed: () => _confirmCancel(active),
-                            style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.redAccent),
-                            child: const Text('取消'),
-                          ),
-                          OutlinedButton(
-                            onPressed: () => state.jobAction(active, 'retry'),
-                            child: const Text('重试'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+      );
+    }
+
+    return PageFrame(children: [list, const SizedBox(height: 16), detail]);
+  }
+}
+
+class _JobDetailCard extends StatelessWidget {
+  final Job? job;
+  final TextEditingController input;
+  final VoidCallback? onInput;
+  final VoidCallback? onPause;
+  final VoidCallback? onResume;
+  final VoidCallback? onCancel;
+  final VoidCallback? onRetry;
+  final VoidCallback? onDelete;
+
+  const _JobDetailCard({
+    required this.job,
+    required this.input,
+    this.onInput,
+    this.onPause,
+    this.onResume,
+    this.onCancel,
+    this.onRetry,
+    this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final active = job;
+    if (active == null) {
+      return const EmptyState(
+        icon: Icons.list_alt,
+        title: '任务详情',
+        message: '选择一个任务查看进度、日志摘要和可用操作。',
+      );
+    }
+
+    return AppCard(
+      title: active.displayTitle,
+      trailing: StatusBadge(stateText(active.state)),
+      children: [
+        LinearProgressIndicator(value: (active.percent / 100).clamp(0.0, 1.0)),
+        const SizedBox(height: 8),
+        Text(
+          active.progressText.isNotEmpty
+              ? active.progressText
+              : (active.error.isNotEmpty ? active.error : active.outputDir),
+          style: const TextStyle(fontSize: 12, color: Colors.white70),
+        ),
+        if (active.state == 'waiting_input') ...[
+          const SizedBox(height: 12),
+          Text(active.prompt),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: input,
+                  obscureText: active.promptSecret,
+                  onSubmitted: (_) => onInput?.call(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(onPressed: onInput, child: const Text('提交')),
+            ],
           ),
+        ],
+        const SizedBox(height: 4),
+        const Text('详细日志请到“设置 - 日志”查看。',
+            style: TextStyle(fontSize: 12, color: Colors.white70)),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            if (active.isActive)
+              OutlinedButton(onPressed: onPause, child: const Text('暂停')),
+            if (active.state == 'paused')
+              FilledButton(onPressed: onResume, child: const Text('继续')),
+            OutlinedButton(
+              onPressed: onCancel,
+              style:
+                  OutlinedButton.styleFrom(foregroundColor: Colors.redAccent),
+              child: const Text('取消'),
+            ),
+            OutlinedButton(onPressed: onRetry, child: const Text('重试')),
+            OutlinedButton(onPressed: onDelete, child: const Text('删除')),
+          ],
         ),
       ],
     );
-  }
-
-  Future<void> _sendInput(Job job) async {
-    try {
-      await state.api.jobInput(job.jobId, _input.text);
-      _input.clear();
-      await state.loadJobDetail(job.jobId);
-    } catch (e) {
-      state.showToast(e.toString());
-    }
   }
 }

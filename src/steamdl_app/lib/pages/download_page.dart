@@ -1,20 +1,16 @@
-// 下载页:解析链接/AppID → 展示游戏信息 → 配置平台/Depot/保存目录 → 创建任务。
-// 支持从游戏库带 seed 跳转预填。
+// 下载页：解析链接/AppID → 展示游戏信息 → 配置平台/Depot/保存目录 → 创建任务。
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-import '../app_state.dart';
 import '../engine.dart';
 import '../models.dart';
+import '../state_controllers.dart';
+import '../common_widgets.dart';
 
 class DownloadPage extends StatefulWidget {
-  final AppState state;
   final VoidCallback onJobCreated;
 
-  const DownloadPage({
-    super.key,
-    required this.state,
-    required this.onJobCreated,
-  });
+  const DownloadPage({super.key, required this.onJobCreated});
 
   @override
   State<DownloadPage> createState() => _DownloadPageState();
@@ -31,42 +27,24 @@ class _DownloadPageState extends State<DownloadPage> {
   bool _appliedDefaults = false;
   bool _starting = false;
 
-  AppState get state => widget.state;
-
-  @override
-  void initState() {
-    super.initState();
-    state.addListener(_onState);
-    _applyDefaults();
-    _consumeSeed();
-  }
-
   @override
   void dispose() {
-    state.removeListener(_onState);
     _url.dispose();
     _depot.dispose();
     _outputDir.dispose();
     super.dispose();
   }
 
-  void _onState() {
-    if (!mounted) return;
-    _applyDefaults();
-    _consumeSeed();
-    setState(() {});
-  }
-
-  void _applyDefaults() {
-    final settings = state.settings;
-    if (settings == null || _appliedDefaults) return;
+  void _applyDefaults(SettingsController settings) {
+    final current = settings.settings;
+    if (current == null || _appliedDefaults) return;
     _appliedDefaults = true;
-    _os = settings.defaultPlatformOs;
-    if (_outputDir.text.isEmpty) _outputDir.text = settings.defaultDownloadDir;
+    _os = current.defaultPlatformOs;
+    if (_outputDir.text.isEmpty) _outputDir.text = current.defaultDownloadDir;
   }
 
-  void _consumeSeed() {
-    final seed = state.takeDownloadSeed();
+  void _consumeSeed(UiController ui) {
+    final seed = ui.takeDownloadSeed();
     if (seed == null) return;
     _parsed = ParsedTarget(kind: seed.kind, id: seed.id);
     _appInfo = seed.name.isNotEmpty
@@ -82,7 +60,8 @@ class _DownloadPageState extends State<DownloadPage> {
   }
 
   Future<void> _fetchAppInfo(String appId, {AppInfo? fallback}) async {
-    final info = await state.api.appInfo(appId);
+    final api = context.read<AppController>().api;
+    final info = await api.appInfo(appId);
     if (!mounted) return;
     setState(() {
       _appInfo = info != null
@@ -94,35 +73,39 @@ class _DownloadPageState extends State<DownloadPage> {
               headerImage: info.headerImage.isNotEmpty
                   ? info.headerImage
                   : (fallback?.headerImage ?? ''),
-              sizeBytes:
-                  info.sizeBytes > 0 ? info.sizeBytes : (fallback?.sizeBytes ?? 0),
+              sizeBytes: info.sizeBytes > 0
+                  ? info.sizeBytes
+                  : (fallback?.sizeBytes ?? 0),
             )
           : fallback;
     });
   }
 
   Future<void> _parse() async {
+    final app = context.read<AppController>();
+    final ui = context.read<UiController>();
     try {
-      final parsed = await state.api.parse(_url.text);
+      final parsed = await app.api.parse(_url.text);
       setState(() {
         _parsed = parsed;
         _appInfo = null;
       });
       if (parsed.kind == 'app') await _fetchAppInfo(parsed.id);
     } catch (e) {
-      state.showToast(e.toString());
+      ui.showToast(e.toString());
     }
   }
 
   Future<void> _pickDirectory() async {
+    final ui = context.read<UiController>();
     try {
       final picked = await pickNativeDirectory();
       if (picked != null && picked.trim().isNotEmpty) {
         setState(() => _outputDir.text = picked.trim());
-        state.showToast('已选择保存目录');
+        ui.showToast('已选择保存目录');
       }
     } catch (e) {
-      state.showToast('目录选择失败: $e');
+      ui.showToast('目录选择失败: $e');
     }
   }
 
@@ -130,26 +113,31 @@ class _DownloadPageState extends State<DownloadPage> {
     final parsed = _parsed;
     if (parsed == null || _starting) return;
     setState(() => _starting = true);
+    final app = context.read<AppController>();
+    final auth = context.read<AuthController>();
+    final jobs = context.read<JobsController>();
+    final ui = context.read<UiController>();
     try {
       final installDir = _appInfo?.installDir.isNotEmpty == true
           ? _appInfo!.installDir
           : (_appInfo?.name ?? '');
-      final job = await state.api.createJob(
+      final job = await app.api.createJob(
         kind: parsed.kind,
         id: parsed.id,
-        username: state.selectedAccount,
+        username: auth.selectedAccount,
         os: _os,
         depot: _depot.text.trim(),
         outputDir: _outputDir.text.trim(),
         installDir: installDir,
         name: _appInfo?.name ?? '',
       );
-      state.setActiveJob(job);
-      state.showToast('任务已创建: ${job.jobId.substring(0, job.jobId.length < 8 ? job.jobId.length : 8)}');
-      await state.refresh();
+      jobs.setActiveJob(job);
+      ui.showToast(
+          '任务已创建: ${job.jobId.substring(0, job.jobId.length < 8 ? job.jobId.length : 8)}');
+      await app.refresh();
       widget.onJobCreated();
     } catch (e) {
-      state.showToast(e.toString());
+      ui.showToast(e.toString());
     } finally {
       if (mounted) setState(() => _starting = false);
     }
@@ -157,170 +145,151 @@ class _DownloadPageState extends State<DownloadPage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    final auth = context.watch<AuthController>();
+    final settings = context.watch<SettingsController>();
+    final ui = context.read<UiController>();
+    _applyDefaults(settings);
+    _consumeSeed(ui);
+
+    return PageFrame(
       children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        AppCard(
+          title: '解析链接下载',
+          subtitle: '当前账号：${auth.selectedAccount}。也可以从游戏库选择游戏后自动跳转到这里。',
+          children: [
+            Row(
               children: [
-                Text('解析链接下载',
-                    style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 4),
-                Text(
-                  '当前账号：${state.selectedAccount}。也可以从游戏库选择游戏后自动跳转到这里。',
-                  style: const TextStyle(fontSize: 12, color: Colors.white70),
+                Expanded(
+                  child: TextField(
+                    controller: _url,
+                    decoration: const InputDecoration(
+                        hintText:
+                            'https://store.steampowered.com/app/730/... 或 AppID'),
+                    onSubmitted: (_) => _parse(),
+                  ),
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _url,
-                        decoration: const InputDecoration(
-                          hintText:
-                              'https://store.steampowered.com/app/730/... 或 AppID',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        onSubmitted: (_) => _parse(),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(onPressed: _parse, child: const Text('解析')),
-                  ],
-                ),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: _parse, child: const Text('解析')),
               ],
             ),
-          ),
+          ],
         ),
         const SizedBox(height: 16),
-        Card(
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (_appInfo?.headerImage.isNotEmpty == true)
-                AspectRatio(
-                  aspectRatio: 460 / 215,
-                  child: Image.network(
-                    _appInfo!.headerImage,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
-                        const ColoredBox(color: Color(0xFF1B2838)),
+        _GameInfoCard(parsed: _parsed, appInfo: _appInfo),
+        const SizedBox(height: 16),
+        AppCard(
+          title: '下载选项',
+          children: [
+            DropdownButtonFormField<String>(
+              value: _os,
+              decoration: const InputDecoration(labelText: '目标平台'),
+              items: const [
+                DropdownMenuItem(value: 'windows', child: Text('Windows')),
+                DropdownMenuItem(value: 'linux', child: Text('Linux')),
+                DropdownMenuItem(value: 'any', child: Text('全部平台')),
+              ],
+              onChanged: (v) => setState(() => _os = v ?? 'windows'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _depot,
+              decoration: const InputDecoration(
+                  labelText: 'Depot ID（可选）', hintText: '例如 731'),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _outputDir,
+                    decoration: InputDecoration(
+                      labelText: '保存目录',
+                      hintText: settings.settings?.defaultDownloadDir ??
+                          '/storage/emulated/0/Download/steamdl',
+                    ),
                   ),
-                )
-              else
-                const SizedBox(
-                  height: 96,
-                  child: Center(
-                      child: Text('Steam',
-                          style: TextStyle(
-                              fontSize: 24, color: Colors.white24))),
                 ),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _appInfo?.name.isNotEmpty == true
-                          ? _appInfo!.name
-                          : (_parsed != null
-                              ? '${_parsed!.kind} ${_parsed!.id}'
-                              : '等待选择游戏'),
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _parsed != null
-                          ? '类型 ${_parsed!.kind} · ID ${_parsed!.id}'
-                              '${(_appInfo?.sizeBytes ?? 0) > 0 ? ' · 待下载大小 ${formatBytes(_appInfo!.sizeBytes)}' : ''}'
-                          : '从游戏库选择，或解析链接后创建下载任务',
-                      style:
-                          const TextStyle(fontSize: 12, color: Colors.white70),
-                    ),
-                  ],
-                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                    onPressed: _pickDirectory, child: const Text('选择')),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text('实际下载会自动在该目录下创建游戏目录（优先使用 Steam 游戏安装目录名）。',
+                style: TextStyle(fontSize: 12, color: Colors.white70)),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _parsed == null || _starting ? null : _start,
+                child: Text(
+                    _starting ? '创建中…' : '使用 ${auth.selectedAccount} 开始下载'),
               ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('下载选项', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: _os,
-                  decoration: const InputDecoration(
-                    labelText: '目标平台',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'windows', child: Text('Windows')),
-                    DropdownMenuItem(value: 'linux', child: Text('Linux')),
-                    DropdownMenuItem(value: 'any', child: Text('全部平台')),
-                  ],
-                  onChanged: (v) => setState(() => _os = v ?? 'windows'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _depot,
-                  decoration: const InputDecoration(
-                    labelText: 'Depot ID（可选）',
-                    hintText: '例如 731',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _outputDir,
-                        decoration: InputDecoration(
-                          labelText: '保存目录',
-                          hintText: state.settings?.defaultDownloadDir ??
-                              '/storage/emulated/0/Download/steamdl',
-                          border: const OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                        onPressed: _pickDirectory, child: const Text('选择')),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  '实际下载会自动在该目录下创建游戏目录（优先使用 Steam 游戏安装目录名）。',
-                  style: TextStyle(fontSize: 12, color: Colors.white70),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: _parsed == null || _starting ? null : _start,
-                    child: Text(_starting
-                        ? '创建中…'
-                        : '使用 ${state.selectedAccount} 开始下载'),
-                  ),
-                ),
-              ],
             ),
-          ),
+          ],
         ),
       ],
+    );
+  }
+}
+
+class _GameInfoCard extends StatelessWidget {
+  final ParsedTarget? parsed;
+  final AppInfo? appInfo;
+
+  const _GameInfoCard({required this.parsed, required this.appInfo});
+
+  @override
+  Widget build(BuildContext context) {
+    final header = appInfo?.headerImage ?? '';
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (header.isNotEmpty)
+            AspectRatio(
+              aspectRatio: 460 / 215,
+              child: Image.network(
+                header,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) =>
+                    const ColoredBox(color: Color(0xFF1B2838)),
+              ),
+            )
+          else
+            const SizedBox(
+              height: 96,
+              child: Center(
+                  child: Text('Steam',
+                      style: TextStyle(fontSize: 24, color: Colors.white24))),
+            ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  appInfo?.name.isNotEmpty == true
+                      ? appInfo!.name
+                      : (parsed != null
+                          ? '${parsed!.kind} ${parsed!.id}'
+                          : '等待选择游戏'),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  parsed != null
+                      ? '类型 ${parsed!.kind} · ID ${parsed!.id}'
+                          '${(appInfo?.sizeBytes ?? 0) > 0 ? ' · 待下载大小 ${formatBytes(appInfo!.sizeBytes)}' : ''}'
+                      : '从游戏库选择，或解析链接后创建下载任务',
+                  style: const TextStyle(fontSize: 12, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

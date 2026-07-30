@@ -6,11 +6,12 @@ version: 2.0.0+2
 environment:
   sdk: ">=3.4.0 <4.0.0"
 
-# 刻意零第三方依赖:网络用 dart:io,状态管理用 ChangeNotifier,
-# 平台能力(前台服务/SAF/目录)走 MethodChannel,保证 CI 构建确定性。
+# UI 状态管理使用 provider 分层；collection 用于库/任务集合处理。
 dependencies:
   flutter:
     sdk: flutter
+  collection: ^1.18.0
+  provider: ^6.1.2
 
 dev_dependencies:
   flutter_lints: ^4.0.0
