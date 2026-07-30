@@ -578,6 +578,30 @@ namespace SteamDl.Core
             return AccountSettingsStore.Instance.LoginTokens.Keys.OrderBy(x => x).ToList();
         }
 
+        public string SelectedAccount()
+        {
+            EnsureAccountStoreLoaded();
+            var selected = _store.GetSettings().SelectedAccount?.Trim() ?? "";
+            return IsLoggedIn(selected) ? selected : "";
+        }
+
+        public bool SelectAccount(string username, out string error)
+        {
+            EnsureAccountStoreLoaded();
+            username = username?.Trim() ?? "";
+            if (username.Length > 0 && !IsLoggedIn(username))
+            {
+                error = "账号未登录或 refresh token 已失效";
+                return false;
+            }
+
+            var settings = _store.GetSettings();
+            settings.SelectedAccount = username;
+            _store.SaveSettings(settings);
+            error = null;
+            return true;
+        }
+
         public JsonArray AccountDetailsJson()
         {
             EnsureAccountStoreLoaded();
@@ -1127,10 +1151,19 @@ namespace SteamDl.Core
         {
             EnsureAccountStoreLoaded();
             if (string.IsNullOrWhiteSpace(username)) return false;
+            username = username.Trim();
+            var wasSelected = string.Equals(_store.GetSettings().SelectedAccount?.Trim(), username, StringComparison.OrdinalIgnoreCase);
             var removed = AccountSettingsStore.Instance.LoginTokens.Remove(username);
             AccountSettingsStore.Instance.GuardData.Remove(username);
             _store.ClearAccountSecret(username);
-            if (removed) AccountSettingsStore.Save();
+            if (removed)
+            {
+                if (wasSelected)
+                {
+                    SelectAccount("", out _);
+                }
+                AccountSettingsStore.Save();
+            }
             return removed;
         }
 
@@ -1156,6 +1189,7 @@ namespace SteamDl.Core
 
                 _store.TouchAccount(username);
                 _store.SaveAccountPassword(username, password, rememberPassword);
+                SelectAccount(username, out _);
 
                 lock (_sync)
                 {

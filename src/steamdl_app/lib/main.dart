@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 import 'app_state.dart';
+import 'app_theme.dart';
 import 'engine.dart';
 import 'pages/accounts_page.dart';
 import 'pages/download_page.dart';
@@ -47,14 +48,7 @@ class _SteamDlAppState extends State<SteamDlApp> {
     return MaterialApp(
       title: 'SteamDl',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1B2838),
-          brightness: Brightness.dark,
-        ),
-        scaffoldBackgroundColor: const Color(0xFF14202B),
-      ),
+      theme: AppTheme.dark(),
       home: HomeShell(state: widget.state),
     );
   }
@@ -139,7 +133,16 @@ class _HomeShellState extends State<HomeShell> {
 
     final body = Stack(
       children: [
-        IndexedStack(index: _index, children: pages),
+        DecoratedBox(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFF132233), Color(0xFF101923)],
+            ),
+          ),
+          child: IndexedStack(index: _index, children: pages),
+        ),
         if (state.toast.isNotEmpty)
           Positioned(
             top: 12,
@@ -149,7 +152,10 @@ class _HomeShellState extends State<HomeShell> {
               child: GestureDetector(
                 onTap: state.clearToast,
                 child: Material(
-                  color: Colors.black.withValues(alpha: 0.85),
+                  color: Theme.of(context)
+                      .colorScheme
+                      .inverseSurface
+                      .withValues(alpha: 0.94),
                   borderRadius: BorderRadius.circular(10),
                   child: Padding(
                     padding:
@@ -168,12 +174,14 @@ class _HomeShellState extends State<HomeShell> {
             right: 16,
             child: Center(
               child: Material(
-                color: Colors.red.shade900,
+                color: Theme.of(context).colorScheme.errorContainer,
                 borderRadius: BorderRadius.circular(8),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Text('引擎服务离线，正在自动重连…',
-                      style: TextStyle(color: Colors.white, fontSize: 12)),
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onErrorContainer,
+                          fontSize: 12)),
                 ),
               ),
             ),
@@ -232,7 +240,12 @@ class _HomeShellState extends State<HomeShell> {
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 child: Column(
                   children: [
-                    const CircleAvatar(child: Text('SD')),
+                    const CircleAvatar(
+                      backgroundColor: AppTheme.seed,
+                      foregroundColor: Colors.black,
+                      child: Text('SD',
+                          style: TextStyle(fontWeight: FontWeight.w800)),
+                    ),
                     const SizedBox(height: 8),
                     Text(
                       state.loggedIn ? state.selectedAccount : '未登录',

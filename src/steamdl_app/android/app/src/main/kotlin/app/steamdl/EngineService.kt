@@ -36,6 +36,33 @@ class EngineService : Service() {
 
         @Volatile
         private var supervising = false
+
+        @Volatile
+        private var status = "idle"
+
+        @Volatile
+        private var error = ""
+
+        @Volatile
+        private var lastOutput = ""
+
+        fun statusSnapshot(): Map<String, Any> = mapOf(
+            "status" to status,
+            "error" to error,
+            "last_output" to lastOutput,
+            "process_alive" to (process?.isAlive == true),
+        )
+
+        private fun setStatus(value: String, message: String = "") {
+            status = value
+            error = message
+            if (message.isNotBlank()) Log.e(TAG, "engine status=$value: $message")
+        }
+
+        private fun appendOutput(line: String) {
+            val merged = if (lastOutput.isBlank()) line else "$lastOutput\n$line"
+            lastOutput = if (merged.length > 3000) merged.takeLast(3000) else merged
+        }
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -47,6 +74,7 @@ class EngineService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        setStatus("service_started")
         startForeground(NOTIFICATION_ID, buildNotification())
         acquireWakeLock()
         startSupervisor()
@@ -74,16 +102,21 @@ class EngineService : Service() {
             while (supervising) {
                 try {
                     if (process?.isAlive != true) {
+                        setStatus("starting")
                         launchEngine()
                     }
-                    process?.waitFor()
+                    val exitCode = process?.waitFor()
                     if (supervising) {
-                        Log.w(TAG, "engine exited, restarting in 2s")
+                        val message = "engine exited code=${exitCode ?: "unknown"}"
+                        setStatus("exited", message)
+                        process = null
+                        Log.w(TAG, "$message, restarting in 2s")
                         Thread.sleep(2000)
                     }
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: Exception) {
+                    setStatus("failed", e.toString())
                     Log.e(TAG, "engine supervise error: ${e.message}")
                     try {
                         Thread.sleep(3000)
@@ -102,6 +135,13 @@ class EngineService : Service() {
         if (!engine.exists()) {
             throw IllegalStateException("engine binary missing: $engine")
         }
+        if (!engine.canExecute()) {
+            Log.w(TAG, "engine binary is not marked executable: $engine")
+        }
+
+        requireNativeLibrary(nativeDir, "libe_sqlite3.so")
+        requireNativeLibrary(nativeDir, "libssl_3.so")
+        requireNativeLibrary(nativeDir, "libcrypto_3.so")
 
         val filesDir = filesDir.absolutePath
         val sslDir = prepareOpenSslLinks(nativeDir)
@@ -130,11 +170,14 @@ class EngineService : Service() {
         val proc = builder.start()
         process = proc
         engineStdin = proc.outputStream
+        setStatus("process_started")
 
         // 引擎日志转发到 logcat
         Thread({
             try {
                 proc.inputStream.bufferedReader().forEachLine { line ->
+                    appendOutput(line)
+                    if (line.contains("HTTP API listening")) setStatus("http_listening")
                     Log.i(TAG, line)
                 }
             } catch (_: Exception) {
@@ -156,6 +199,13 @@ class EngineService : Service() {
             } else {
                 Log.e(TAG, "native lib missing: ${file.absolutePath}")
             }
+        }
+    }
+
+    private fun requireNativeLibrary(nativeDir: String, name: String) {
+        val file = File(nativeDir, name)
+        if (!file.exists()) {
+            throw IllegalStateException("native lib missing: ${file.absolutePath}")
         }
     }
 

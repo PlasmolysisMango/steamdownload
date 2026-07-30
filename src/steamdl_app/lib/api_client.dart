@@ -83,7 +83,7 @@ class ApiClient {
 
   // ---- 账号 ----
 
-  Future<(List<String>, List<AccountDetail>, LoginState)> accounts() async {
+  Future<(List<String>, List<AccountDetail>, LoginState, String)> accounts() async {
     final data = await _get('/api/accounts');
     final names = ((data['accounts'] as List?) ?? const [])
         .map((x) => x.toString())
@@ -95,7 +95,7 @@ class ApiClient {
     final login = data['login'] is Map<String, dynamic>
         ? LoginState.fromJson(data['login'] as Map<String, dynamic>)
         : LoginState.idle;
-    return (names, details, login);
+    return (names, details, login, (data['selected_account'] ?? '').toString());
   }
 
   Future<LoginState> login(String username, String password, bool rememberPassword) async {
@@ -119,6 +119,9 @@ class ApiClient {
 
   Future<void> logout(String username) =>
       _post('/api/accounts/logout', {'username': username});
+
+  Future<void> selectAccount(String username) =>
+      _post('/api/accounts/select', {'username': username});
 
   // ---- 解析与游戏信息 ----
 

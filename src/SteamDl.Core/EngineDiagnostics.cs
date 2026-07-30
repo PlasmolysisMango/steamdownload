@@ -30,6 +30,30 @@ namespace SteamDl.Core
             }
         }
 
+        public static void BeginSession()
+        {
+            lock (Sync)
+            {
+                Lines.Clear();
+                JobManagerReady = false;
+                JobManagerError = "";
+            }
+
+            try
+            {
+                var path = LogPath;
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(path, "");
+            }
+            catch
+            {
+                // 无法清空文件日志时继续使用内存日志。
+            }
+
+            Log("engine", $"New diagnostic session pid={Environment.ProcessId}");
+        }
+
         public static void AttachConsoleRelay(ConsoleRelay relay)
         {
             if (relay == null || _relayAttached) return;

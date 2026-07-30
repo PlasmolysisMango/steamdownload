@@ -127,6 +127,7 @@ class AppState extends ChangeNotifier {
       accounts = accountsRes.$1;
       accountDetails = accountsRes.$2;
       final nextLogin = accountsRes.$3;
+      _restoreSelectedAccount(accountsRes.$4);
       _handleLoginTransition(nextLogin);
       loginState = nextLogin;
     } catch (e) {
@@ -159,6 +160,20 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       // 诊断日志读取失败不影响主流程。
     }
+  }
+
+  void _restoreSelectedAccount(String remembered) {
+    if (accounts.isEmpty) {
+      selectedAccount = '';
+      return;
+    }
+    if (selectedAccount.isNotEmpty && accounts.contains(selectedAccount)) return;
+
+    final trimmed = remembered.trim();
+    final next = trimmed.isNotEmpty && accounts.contains(trimmed)
+        ? trimmed
+        : accounts.first;
+    setSelectedAccount(next, silent: true, persist: trimmed != next);
   }
 
   void _handleLoginTransition(LoginState next) {
@@ -199,10 +214,14 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void setSelectedAccount(String username, {bool silent = false}) {
+  void setSelectedAccount(String username,
+      {bool silent = false, bool persist = true}) {
     final next = username.trim();
     if (selectedAccount == next) return;
     selectedAccount = next;
+    if (persist) {
+      unawaited(api.selectAccount(next).catchError((_) {}));
+    }
     // 切换账号后触发一次增量同步
     if (next.isNotEmpty && accounts.contains(next) && _autoIncrementalFor != next) {
       _autoIncrementalFor = next;
@@ -353,7 +372,9 @@ class AppState extends ChangeNotifier {
   Future<void> logout(String username) async {
     try {
       await api.logout(username);
-      if (selectedAccount == username) selectedAccount = '';
+      if (selectedAccount == username) {
+        setSelectedAccount('', silent: true);
+      }
       await refresh();
     } catch (e) {
       showToast(e.toString());

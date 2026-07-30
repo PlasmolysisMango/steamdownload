@@ -93,16 +93,38 @@ class EngineController {
   }
 
   Future<void> _waitReady() async {
-    final deadline = DateTime.now().add(const Duration(seconds: 25));
+    const startupTimeout = Duration(seconds: 10);
+    final deadline = DateTime.now().add(startupTimeout);
     while (DateTime.now().isBefore(deadline)) {
-      if (await api.ping(timeout: const Duration(milliseconds: 800))) return;
-      if (!Platform.isAndroid && _lastExitCode != null) {
+      if (await api.ping(timeout: const Duration(milliseconds: 500))) return;
+      if (Platform.isAndroid) {
+        final status = await _androidEngineStatus();
+        final state = (status['status'] ?? '').toString();
+        if (state == 'failed' || state == 'exited') {
+          final error = (status['error'] ?? '').toString();
+          final output = (status['last_output'] ?? '').toString().trim();
+          throw StateError('Android 引擎启动失败($state)'
+              '${error.isEmpty ? '' : ': $error'}'
+              '${output.isEmpty ? '' : '\n$output'}');
+        }
+      } else if (_lastExitCode != null) {
         final log = _lastOutput.trim();
         throw StateError('引擎进程已退出(ExitCode=$_lastExitCode)${log.isEmpty ? '' : ': $log'}');
       }
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
     }
-    throw StateError('引擎启动超时: 25 秒内未响应 http://${api.host}:${api.port}/api/config');
+    throw StateError('引擎启动超时: ${startupTimeout.inSeconds} 秒内未响应 '
+        'http://${api.host}:${api.port}/api/config');
+  }
+
+  Future<Map<dynamic, dynamic>> _androidEngineStatus() async {
+    try {
+      final status = await platformChannel.invokeMethod<Map<dynamic, dynamic>>(
+          'engineServiceStatus');
+      return status ?? const {};
+    } catch (_) {
+      return const {};
+    }
   }
 
   void _armWatchdog() {

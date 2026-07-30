@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_state.dart';
+import '../app_theme.dart';
 import '../engine.dart';
 import '../models.dart';
 
@@ -290,7 +291,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     child: SelectableText(
                       _logText.isNotEmpty ? _logText : '暂无日志',
                       style: const TextStyle(
-                          fontFamily: 'monospace', fontSize: 11.5, height: 1.5),
+                        fontFamily: 'Cascadia Mono',
+                        fontFamilyFallback: AppTheme.monoFontFallback,
+                        fontSize: 11.5,
+                        height: 1.5,
+                      ),
                     ),
                   ),
                 ),

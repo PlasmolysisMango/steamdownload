@@ -14,6 +14,7 @@ var host = Environment.GetEnvironmentVariable("STEAMDL_BIND_HOST");
 if (string.IsNullOrWhiteSpace(host)) host = "127.0.0.1";
 
 // 先保留原始 stdout 用于服务日志,再接管 Console 给下载引擎
+EngineDiagnostics.BeginSession();
 EngineDiagnostics.Log("engine", "SteamDl sidecar starting");
 EngineDiagnostics.AttachConsoleRelay(ConsoleRelay.Instance);
 ConsoleRelay.Instance.Install(passthroughToStdout: true);

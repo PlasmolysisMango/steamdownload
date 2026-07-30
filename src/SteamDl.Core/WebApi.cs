@@ -340,7 +340,13 @@ namespace SteamDl.Core
                     {
                         var arr = new JsonArray();
                         foreach (var account in JobManager.Instance.Accounts()) arr.Add(account);
-                        await WriteJsonAsync(ctx, 200, new JsonObject { ["accounts"] = arr, ["account_details"] = JobManager.Instance.AccountDetailsJson(), ["login"] = LoginJson(JobManager.Instance.LoginStatus()) });
+                        await WriteJsonAsync(ctx, 200, new JsonObject
+                        {
+                            ["accounts"] = arr,
+                            ["account_details"] = JobManager.Instance.AccountDetailsJson(),
+                            ["selected_account"] = JobManager.Instance.SelectedAccount(),
+                            ["login"] = LoginJson(JobManager.Instance.LoginStatus()),
+                        });
                         break;
                     }
 
@@ -401,6 +407,19 @@ namespace SteamDl.Core
                             break;
                         }
                         await WriteJsonAsync(ctx, 200, Ok());
+                        break;
+                    }
+
+                    case ("POST", "/api/accounts/select"):
+                    {
+                        var body = await ReadJsonAsync(req);
+                        var username = body?["username"]?.GetValue<string>() ?? "";
+                        if (!JobManager.Instance.SelectAccount(username, out var selectError))
+                        {
+                            await WriteJsonAsync(ctx, 409, Error(selectError));
+                            break;
+                        }
+                        await WriteJsonAsync(ctx, 200, new JsonObject { ["selected_account"] = JobManager.Instance.SelectedAccount() });
                         break;
                     }
 
@@ -504,6 +523,7 @@ namespace SteamDl.Core
             DefaultPlatformOs = body?["default_platform_os"]?.GetValue<string>() ?? "windows",
             MaxDownloads = body?["max_downloads"]?.GetValue<int>() ?? 8,
             AutoResume = body?["auto_resume"]?.GetValue<bool>() ?? true,
+            SelectedAccount = body?["selected_account"]?.GetValue<string>() ?? JobStore.Instance.GetSettings().SelectedAccount,
         };
 
         static JsonObject SettingsJson(AppSettings settings) => new()
@@ -512,6 +532,7 @@ namespace SteamDl.Core
             ["default_platform_os"] = settings.DefaultPlatformOs,
             ["max_downloads"] = settings.MaxDownloads,
             ["auto_resume"] = settings.AutoResume,
+            ["selected_account"] = settings.SelectedAccount ?? "",
         };
 
         static JsonObject LoginJson(LoginState login) => new()

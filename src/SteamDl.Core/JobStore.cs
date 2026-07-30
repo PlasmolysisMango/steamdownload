@@ -37,6 +37,7 @@ namespace SteamDl.Core
         public string DefaultPlatformOs { get; set; } = "windows";
         public int MaxDownloads { get; set; } = 8;
         public bool AutoResume { get; set; } = true;
+        public string SelectedAccount { get; set; } = "";
     }
 
     public sealed class AccountRecord
@@ -163,6 +164,7 @@ CREATE INDEX IF NOT EXISTS idx_library_games_username_name ON library_games(user
                 EnsureDefaultSetting(conn, "default_platform_os", "windows");
                 EnsureDefaultSetting(conn, "max_downloads", "8");
                 EnsureDefaultSetting(conn, "auto_resume", "true");
+                EnsureDefaultSetting(conn, "selected_account", "");
             }
         }
 
@@ -409,6 +411,7 @@ SELECT line, created_at FROM (
                     DefaultPlatformOs = Get("default_platform_os", "windows"),
                     MaxDownloads = int.TryParse(Get("max_downloads", "8"), out var n) ? Math.Max(1, n) : 8,
                     AutoResume = bool.TryParse(Get("auto_resume", "true"), out var b) ? b : true,
+                    SelectedAccount = Get("selected_account", ""),
                 };
             }
         }
@@ -423,6 +426,7 @@ SELECT line, created_at FROM (
                 UpsertSetting(conn, "default_platform_os", string.IsNullOrWhiteSpace(settings.DefaultPlatformOs) ? "windows" : settings.DefaultPlatformOs);
                 UpsertSetting(conn, "max_downloads", Math.Max(1, settings.MaxDownloads).ToString());
                 UpsertSetting(conn, "auto_resume", settings.AutoResume ? "true" : "false");
+                UpsertSetting(conn, "selected_account", string.IsNullOrWhiteSpace(settings.SelectedAccount) ? "" : settings.SelectedAccount.Trim());
             }
             return GetSettings();
         }

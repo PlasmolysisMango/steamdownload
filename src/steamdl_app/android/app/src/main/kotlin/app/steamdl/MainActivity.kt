@@ -31,8 +31,16 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "startEngineService" -> {
-                        startEngineService()
-                        result.success(null)
+                        try {
+                            startEngineService()
+                            result.success(EngineService.statusSnapshot())
+                        } catch (e: Exception) {
+                            result.error("engine_start_failed", e.message, e.toString())
+                        }
+                    }
+
+                    "engineServiceStatus" -> {
+                        result.success(EngineService.statusSnapshot())
                     }
 
                     "pickDirectory" -> {
@@ -57,7 +65,11 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         // 进入界面即拉起引擎,不等待 Dart 侧首次调用
-        startEngineService()
+        try {
+            startEngineService()
+        } catch (_: Exception) {
+            // Dart 侧会再次调用 startEngineService 并拿到明确错误。
+        }
     }
 
     private fun startEngineService() {

@@ -82,12 +82,14 @@ class AppSettings {
   final String defaultPlatformOs;
   final int maxDownloads;
   final bool autoResume;
+  final String selectedAccount;
 
   const AppSettings({
     required this.defaultDownloadDir,
     required this.defaultPlatformOs,
     required this.maxDownloads,
     required this.autoResume,
+    required this.selectedAccount,
   });
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -95,6 +97,7 @@ class AppSettings {
         defaultPlatformOs: _str(json['default_platform_os'], 'windows'),
         maxDownloads: _num(json['max_downloads'], 8).toInt(),
         autoResume: json['auto_resume'] != false,
+        selectedAccount: _str(json['selected_account']),
       );
 
   Map<String, dynamic> toJson() => {
@@ -102,6 +105,7 @@ class AppSettings {
         'default_platform_os': defaultPlatformOs,
         'max_downloads': maxDownloads,
         'auto_resume': autoResume,
+        'selected_account': selectedAccount,
       };
 
   AppSettings copyWith({
@@ -109,12 +113,14 @@ class AppSettings {
     String? defaultPlatformOs,
     int? maxDownloads,
     bool? autoResume,
+    String? selectedAccount,
   }) =>
       AppSettings(
         defaultDownloadDir: defaultDownloadDir ?? this.defaultDownloadDir,
         defaultPlatformOs: defaultPlatformOs ?? this.defaultPlatformOs,
         maxDownloads: maxDownloads ?? this.maxDownloads,
         autoResume: autoResume ?? this.autoResume,
+        selectedAccount: selectedAccount ?? this.selectedAccount,
       );
 }
 
