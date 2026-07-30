@@ -1,5 +1,6 @@
 // 设置页:默认下载目录/默认平台/最大线程/自动恢复 + 日志查看器。
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../engine.dart';
@@ -22,6 +23,8 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _dirty = false;
   bool _initialized = false;
   String _logJobId = '';
+
+  static const _engineLogId = '__engine__';
 
   AppState get state => widget.state;
 
@@ -87,6 +90,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   String get _logText {
+    if (_logJobId == _engineLogId) return state.engineLog;
     if (_logJobId.isNotEmpty && state.activeJob?.jobId == _logJobId) {
       return state.activeJob?.log ?? '';
     }
@@ -197,46 +201,68 @@ class _SettingsPageState extends State<SettingsPage> {
                           style: Theme.of(context).textTheme.titleMedium),
                     ),
                     TextButton(
-                      onPressed: () => state.refresh(),
+                      onPressed: () async {
+                        await state.refreshDiagnostics();
+                        await state.refresh();
+                      },
                       child: const Text('刷新'),
+                    ),
+                    TextButton(
+                      onPressed: _logText.isEmpty
+                          ? null
+                          : () async {
+                              await Clipboard.setData(
+                                  ClipboardData(text: _logText));
+                              state.showToast('日志已复制');
+                            },
+                      child: const Text('复制'),
                     ),
                   ],
                 ),
-                if (state.jobs.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value: _logJobId.isNotEmpty &&
-                            state.jobs.any((j) => j.jobId == _logJobId)
-                        ? _logJobId
-                        : '',
-                    decoration: const InputDecoration(
-                      labelText: '选择任务日志',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    items: [
-                      const DropdownMenuItem(
-                          value: '', child: Text('登录日志 / 当前任务')),
-                      for (final job in state.jobs)
-                        DropdownMenuItem(
-                          value: job.jobId,
-                          child: Text(
-                            '${job.displayTitle} · ${stateText(job.state)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                    ],
-                    onChanged: (v) async {
-                      _logJobId = v ?? '';
-                      if (_logJobId.isNotEmpty) {
-                        await state.loadJobDetail(_logJobId);
-                      }
-                      setState(() {});
-                    },
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: _logJobId.isNotEmpty &&
+                          (_logJobId == _engineLogId ||
+                              state.jobs.any((j) => j.jobId == _logJobId))
+                      ? _logJobId
+                      : '',
+                  decoration: const InputDecoration(
+                    labelText: '选择日志',
+                    border: OutlineInputBorder(),
+                    isDense: true,
                   ),
-                ],
-                if (state.activeJob != null) ...[
+                  items: [
+                    const DropdownMenuItem(
+                        value: _engineLogId, child: Text('引擎诊断日志')),
+                    const DropdownMenuItem(
+                        value: '', child: Text('登录日志 / 当前任务')),
+                    for (final job in state.jobs)
+                      DropdownMenuItem(
+                        value: job.jobId,
+                        child: Text(
+                          '${job.displayTitle} · ${stateText(job.state)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: (v) async {
+                    _logJobId = v ?? '';
+                    if (_logJobId == _engineLogId) {
+                      await state.refreshDiagnostics();
+                    } else if (_logJobId.isNotEmpty) {
+                      await state.loadJobDetail(_logJobId);
+                    }
+                    setState(() {});
+                  },
+                ),
+                if (_logJobId == _engineLogId && state.engineLogPath.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    '日志文件：${state.engineLogPath}',
+                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                  ),
+                ] else if (state.activeJob != null) ...[
                   const SizedBox(height: 8),
                   Text(
                     '当前任务：${state.activeJob!.displayTitle} · ${stateText(state.activeJob!.state)}',

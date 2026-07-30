@@ -79,6 +79,8 @@ class ApiClient {
 
   Future<Map<String, dynamic>> config() => _get('/api/config');
 
+  Future<Map<String, dynamic>> diagnosticsLog() => _get('/api/diagnostics/log');
+
   // ---- 账号 ----
 
   Future<(List<String>, List<AccountDetail>, LoginState)> accounts() async {

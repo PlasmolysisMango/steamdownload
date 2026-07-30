@@ -1320,7 +1320,9 @@ namespace SteamDl.Core
             lock (_sync)
             {
                 if (_accountStoreLoaded) return;
-                AccountSettingsStore.LoadFromFile("account.config");
+                var accountConfigPath = Path.Combine(AppPaths.DataDir, "account.config");
+                EngineDiagnostics.Log("account", "Loading account settings: " + accountConfigPath);
+                AccountSettingsStore.LoadFromFile(accountConfigPath);
                 _accountStoreLoaded = true;
             }
         }

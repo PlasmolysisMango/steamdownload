@@ -14,11 +14,14 @@ var host = Environment.GetEnvironmentVariable("STEAMDL_BIND_HOST");
 if (string.IsNullOrWhiteSpace(host)) host = "127.0.0.1";
 
 // 先保留原始 stdout 用于服务日志,再接管 Console 给下载引擎
+EngineDiagnostics.Log("engine", "SteamDl sidecar starting");
+EngineDiagnostics.AttachConsoleRelay(ConsoleRelay.Instance);
 ConsoleRelay.Instance.Install(passthroughToStdout: true);
 
 // 先启动 HTTP 健康检查端点,避免任务恢复/账号存储初始化拖慢 UI 启动
 var api = new WebApi(port, host);
 api.Start();
+EngineDiagnostics.Log("engine", $"HTTP API listening on http://{host}:{port}");
 
 Console.Out.Flush();
 Console.WriteLine($"* SteamDl engine sidecar: http://{host}:{port}");
@@ -28,10 +31,12 @@ _ = Task.Run(() =>
     try
     {
         _ = JobManager.Instance; // 触发事件接线 + 恢复中断任务
+        EngineDiagnostics.MarkJobManagerReady();
         Console.WriteLine("* SteamDl job manager ready");
     }
     catch (Exception ex)
     {
+        EngineDiagnostics.MarkJobManagerError(ex);
         Console.Error.WriteLine("SteamDl job manager init failed: " + ex);
     }
 });
@@ -57,6 +62,7 @@ if (Environment.GetEnvironmentVariable("STEAMDL_SIDECAR") == "1")
         if (read <= 0) break;
     }
     api.Stop();
+    EngineDiagnostics.Log("engine", "SteamDl sidecar stopped by stdin EOF");
     return;
 }
 

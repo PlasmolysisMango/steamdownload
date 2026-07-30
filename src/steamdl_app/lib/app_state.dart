@@ -22,6 +22,8 @@ class AppState extends ChangeNotifier {
   bool serviceOnline = false;
   bool engineStarting = true;
   String engineError = '';
+  String engineLog = '';
+  String engineLogPath = '';
 
   // ---- 轮询数据 ----
   List<Job> jobs = [];
@@ -93,37 +95,69 @@ class AppState extends ChangeNotifier {
 
   Future<void> refresh() async {
     if (_disposed) return;
+    Map<String, dynamic> config;
     try {
-      final results = await Future.wait([
-        api.jobs(),
-        api.accounts(),
-        api.settings(),
-        api.config(),
-      ]);
-      jobs = results[0] as List<Job>;
-      final accountsRes =
-          results[1] as (List<String>, List<AccountDetail>, LoginState);
-      accounts = accountsRes.$1;
-      accountDetails = accountsRes.$2;
-      final nextLogin = accountsRes.$3;
-      settings = results[2] as AppSettings;
-      final config = results[3] as Map<String, dynamic>;
+      config = await api.config();
       canPickDirectory = config['can_pick_directory'] == true ||
           defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.windows ||
           defaultTargetPlatform == TargetPlatform.linux;
       serviceOnline = true;
+      engineLogPath = (config['log_path'] ?? '').toString();
+      final jobManagerError = (config['job_manager_error'] ?? '').toString();
+      engineError = jobManagerError.isEmpty ? '' : 'JobManager 初始化失败：$jobManagerError';
+    } catch (e) {
+      serviceOnline = false;
+      engineError = '无法连接下载引擎：$e';
+      notifyListeners();
+      return;
+    }
 
+    await refreshDiagnostics(notify: false);
+
+    try {
+      jobs = await api.jobs();
+    } catch (e) {
+      engineError = '读取任务失败：$e';
+      jobs = const [];
+    }
+
+    try {
+      final accountsRes = await api.accounts();
+      accounts = accountsRes.$1;
+      accountDetails = accountsRes.$2;
+      final nextLogin = accountsRes.$3;
       _handleLoginTransition(nextLogin);
       loginState = nextLogin;
+    } catch (e) {
+      engineError = '读取账号/登录状态失败：$e';
+      accounts = const [];
+      accountDetails = const [];
+      loginState = LoginState.idle;
+    }
 
-      await _refreshActiveJob();
-      notifyListeners();
-    } catch (_) {
-      if (serviceOnline) {
-        serviceOnline = false;
-        notifyListeners();
+    try {
+      settings = await api.settings();
+    } catch (e) {
+      engineError = '读取设置失败：$e';
+    }
+
+    await _refreshActiveJob();
+    notifyListeners();
+  }
+
+  Future<void> refreshDiagnostics({bool notify = true}) async {
+    try {
+      final data = await api.diagnosticsLog();
+      engineLog = (data['log'] ?? '').toString();
+      engineLogPath = (data['log_path'] ?? engineLogPath).toString();
+      final error = (data['job_manager_error'] ?? '').toString();
+      if (error.isNotEmpty) {
+        engineError = 'JobManager 初始化失败：$error';
       }
+      if (notify && !_disposed) notifyListeners();
+    } catch (_) {
+      // 诊断日志读取失败不影响主流程。
     }
   }
 

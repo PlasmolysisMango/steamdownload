@@ -91,9 +91,24 @@ namespace SteamDl.Core
                             ["can_pick_directory"] = PickDirectoryHandler != null,
                             ["can_open_output"] = OpenPathHandler != null,
                             ["engine_ready"] = true,
+                            ["job_manager_ready"] = EngineDiagnostics.JobManagerReady,
+                            ["job_manager_error"] = EngineDiagnostics.JobManagerError,
+                            ["log_path"] = EngineDiagnostics.LogPath,
                             ["engine"] = "DepotDownloader",
                         });
                         break;
+
+                    case ("GET", "/api/diagnostics/log"):
+                    {
+                        await WriteJsonAsync(ctx, 200, new JsonObject
+                        {
+                            ["log"] = EngineDiagnostics.ReadText(),
+                            ["log_path"] = EngineDiagnostics.LogPath,
+                            ["job_manager_ready"] = EngineDiagnostics.JobManagerReady,
+                            ["job_manager_error"] = EngineDiagnostics.JobManagerError,
+                        });
+                        break;
+                    }
 
                     case ("POST", "/api/pick-directory"):
                     {
@@ -433,9 +448,10 @@ namespace SteamDl.Core
             }
             catch (Exception ex)
             {
+                EngineDiagnostics.Log("api", $"{method} {path} failed: {ex}");
                 try
                 {
-                    await WriteJsonAsync(ctx, 500, Error(ex.Message));
+                    await WriteJsonAsync(ctx, 500, Error(ex.ToString()));
                 }
                 catch
                 {
