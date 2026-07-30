@@ -15,6 +15,8 @@ const MethodChannel platformChannel = MethodChannel('app.steamdl/platform');
 class EngineController {
   final ApiClient api;
   Process? _process;
+  int? _lastExitCode;
+  String _lastOutput = '';
   bool _starting = false;
   Timer? _watchdog;
 
@@ -22,7 +24,7 @@ class EngineController {
 
   /// 启动引擎并等待就绪;应用启动时调用一次,之后由看门狗守护。
   Future<void> ensureStarted() async {
-    if (await api.ping()) {
+    if (await api.ping(timeout: const Duration(milliseconds: 700))) {
       _armWatchdog();
       return;
     }
@@ -63,29 +65,50 @@ class EngineController {
     }
     final process = await Process.start(exe, const [], environment: {
       'STEAMDL_SIDECAR': '1',
+      'STEAMDL_BIND_HOST': api.host,
       'PORT': '${api.port}',
     });
     _process = process;
+    _lastExitCode = null;
+    _lastOutput = '';
     // 输出转发到宿主日志,便于诊断
-    process.stdout.transform(const SystemEncoding().decoder).listen((s) => stdout.write(s));
-    process.stderr.transform(const SystemEncoding().decoder).listen((s) => stderr.write(s));
+    process.stdout
+        .transform(const SystemEncoding().decoder)
+        .listen((s) => _recordOutput(s, stdout));
+    process.stderr
+        .transform(const SystemEncoding().decoder)
+        .listen((s) => _recordOutput(s, stderr));
     unawaited(process.exitCode.then((code) {
+      _lastExitCode = code;
       _process = null;
     }));
   }
 
-  Future<void> _waitReady() async {
-    for (var i = 0; i < 100; i++) {
-      if (await api.ping()) return;
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+  void _recordOutput(String text, IOSink sink) {
+    sink.write(text);
+    _lastOutput = (_lastOutput + text);
+    if (_lastOutput.length > 2000) {
+      _lastOutput = _lastOutput.substring(_lastOutput.length - 2000);
     }
-    throw StateError('引擎启动超时,请重启应用');
+  }
+
+  Future<void> _waitReady() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 25));
+    while (DateTime.now().isBefore(deadline)) {
+      if (await api.ping(timeout: const Duration(milliseconds: 800))) return;
+      if (!Platform.isAndroid && _lastExitCode != null) {
+        final log = _lastOutput.trim();
+        throw StateError('引擎进程已退出(ExitCode=$_lastExitCode)${log.isEmpty ? '' : ': $log'}');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    throw StateError('引擎启动超时: 25 秒内未响应 http://${api.host}:${api.port}/api/config');
   }
 
   void _armWatchdog() {
     _watchdog ??= Timer.periodic(const Duration(seconds: 5), (_) async {
       if (_starting) return;
-      if (!await api.ping()) {
+      if (!await api.ping(timeout: const Duration(seconds: 1))) {
         try {
           await _start();
         } catch (_) {

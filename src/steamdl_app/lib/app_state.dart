@@ -67,6 +67,10 @@ class AppState extends ChangeNotifier {
     }
     engineStarting = false;
     notifyListeners();
+    if (engineError.isNotEmpty) {
+      serviceOnline = false;
+      return;
+    }
     await refresh();
     _poller = Timer.periodic(const Duration(seconds: 1), (_) => refresh());
   }

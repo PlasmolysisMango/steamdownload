@@ -87,7 +87,7 @@ namespace SteamDl.Core
                         {
                             ["download_dir"] = JobManager.DefaultDownloadDir(),
                             ["data_dir"] = AppPaths.DataDir,
-                            ["database"] = JobStore.Instance.DatabasePath,
+                            ["database"] = AppPaths.DatabasePath,
                             ["can_pick_directory"] = PickDirectoryHandler != null,
                             ["can_open_output"] = OpenPathHandler != null,
                             ["engine_ready"] = true,

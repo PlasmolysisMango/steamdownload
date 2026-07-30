@@ -6,6 +6,7 @@
 // 环境变量: PORT(默认 8630)、STEAMDL_BIND_HOST(默认 127.0.0.1)、
 //           STEAMDL_DATA_DIR(数据目录)、STEAMDL_SIDECAR=1(stdin EOF 时自动退出)
 using System;
+using System.Threading.Tasks;
 using SteamDl.Core;
 
 var port = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var p) ? p : 8630;
@@ -14,13 +15,26 @@ if (string.IsNullOrWhiteSpace(host)) host = "127.0.0.1";
 
 // 先保留原始 stdout 用于服务日志,再接管 Console 给下载引擎
 ConsoleRelay.Instance.Install(passthroughToStdout: true);
-_ = JobManager.Instance; // 触发事件接线 + 恢复中断任务
 
+// 先启动 HTTP 健康检查端点,避免任务恢复/账号存储初始化拖慢 UI 启动
 var api = new WebApi(port, host);
 api.Start();
 
 Console.Out.Flush();
 Console.WriteLine($"* SteamDl engine sidecar: http://{host}:{port}");
+
+_ = Task.Run(() =>
+{
+    try
+    {
+        _ = JobManager.Instance; // 触发事件接线 + 恢复中断任务
+        Console.WriteLine("* SteamDl job manager ready");
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine("SteamDl job manager init failed: " + ex);
+    }
+});
 
 if (Environment.GetEnvironmentVariable("STEAMDL_SIDECAR") == "1")
 {

@@ -56,17 +56,21 @@ class ApiClient {
     return data;
   }
 
-  Future<Map<String, dynamic>> _get(String path, {Map<String, String>? query}) =>
-      _request('GET', path, query: query);
+  Future<Map<String, dynamic>> _get(
+    String path, {
+    Map<String, String>? query,
+    Duration timeout = const Duration(seconds: 20),
+  }) =>
+      _request('GET', path, query: query, timeout: timeout);
 
   Future<Map<String, dynamic>> _post(String path, [Map<String, dynamic>? body]) =>
       _request('POST', path, body: body ?? const {});
 
   // ---- 健康检查 ----
 
-  Future<bool> ping() async {
+  Future<bool> ping({Duration timeout = const Duration(seconds: 1)}) async {
     try {
-      await _get('/api/config');
+      await _get('/api/config', timeout: timeout);
       return true;
     } catch (_) {
       return false;
