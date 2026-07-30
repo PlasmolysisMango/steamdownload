@@ -67,8 +67,8 @@ class EngineController {
     });
     _process = process;
     // 输出转发到宿主日志,便于诊断
-    process.stdout.transform(SystemEncoding().decoder).listen((s) => stdout.write(s));
-    process.stderr.transform(SystemEncoding().decoder).listen((s) => stderr.write(s));
+    process.stdout.transform(const SystemEncoding().decoder).listen((s) => stdout.write(s));
+    process.stderr.transform(const SystemEncoding().decoder).listen((s) => stderr.write(s));
     unawaited(process.exitCode.then((code) {
       _process = null;
     }));

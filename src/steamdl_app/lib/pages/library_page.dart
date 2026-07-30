@@ -350,7 +350,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   },
             child: Text(
               downloading
-                  ? (job!.state == 'paused' ? '已暂停' : '下载中…')
+                  ? (job.state == 'paused' ? '已暂停' : '下载中…')
                   : (downloaded ? '重新下载' : '选择并下载'),
               style: const TextStyle(fontSize: 13),
             ),
