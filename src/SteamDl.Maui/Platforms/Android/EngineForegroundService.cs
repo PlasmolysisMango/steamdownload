@@ -184,11 +184,12 @@ public sealed class EngineForegroundService : Service
         {
             if (!entry.IsDirectory)
             {
-                var outFile = new File(dir, entry.Name);
+                var entryName = entry.Name ?? throw new InvalidOperationException("zip entry name is missing");
+                var outFile = new File(dir, entryName);
                 outFile.ParentFile?.Mkdirs();
                 using var output = System.IO.File.Create(outFile.AbsolutePath!);
-                zip.CopyTo(output);
-                if (entry.Name == "steamdl-engine") outFile.SetExecutable(true, false);
+                CopyZipEntry(zip, output);
+                if (entryName == "steamdl-engine") outFile.SetExecutable(true, false);
             }
             zip.CloseEntry();
         }
@@ -215,9 +216,11 @@ public sealed class EngineForegroundService : Service
 
     Notification BuildNotification()
     {
+#pragma warning disable CA1422
         var builder = Build.VERSION.SdkInt >= BuildVersionCodes.O
             ? new Notification.Builder(this, ChannelId)
             : new Notification.Builder(this);
+#pragma warning restore CA1422
         return builder
             .SetContentTitle("SteamDl 下载服务")
             .SetContentText("下载引擎正在后台运行")
@@ -256,13 +259,23 @@ public sealed class EngineForegroundService : Service
     {
         lock (Sync)
         {
-            var merged = string.IsNullOrWhiteSpace(LastOutput) ? line : LastOutput + Environment.NewLine + line;
+            var merged = string.IsNullOrWhiteSpace(LastOutput) ? line : LastOutput + System.Environment.NewLine + line;
             LastOutput = merged.Length > 3000 ? merged[^3000..] : merged;
         }
     }
 
     static string ReadAllText(File file) => System.IO.File.ReadAllText(file.AbsolutePath!);
     static void WriteAllText(File file, string text) => System.IO.File.WriteAllText(file.AbsolutePath!, text);
+
+    static void CopyZipEntry(ZipInputStream zip, Stream output)
+    {
+        var buffer = new byte[81920];
+        int read;
+        while ((read = zip.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            output.Write(buffer, 0, read);
+        }
+    }
 
     static void DeleteRecursively(File file)
     {
