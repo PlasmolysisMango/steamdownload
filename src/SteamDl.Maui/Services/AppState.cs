@@ -1,4 +1,5 @@
 using SteamDl.Maui.Models;
+using SteamAppInfo = SteamDl.Maui.Models.AppInfo;
 
 namespace SteamDl.Maui.Services;
 
@@ -108,7 +109,7 @@ public sealed class AppState : IAsyncDisposable
         return result;
     }
 
-    public async Task<AppInfo?> LoadAppInfoAsync(string appId)
+    public async Task<SteamAppInfo?> LoadAppInfoAsync(string appId)
     {
         try { return await _api.AppInfoAsync(appId); }
         catch { return null; }

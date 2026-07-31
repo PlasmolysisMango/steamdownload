@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using SteamDl.Maui.Models;
+using SteamAppInfo = SteamDl.Maui.Models.AppInfo;
 
 namespace SteamDl.Maui.Services;
 
@@ -56,7 +57,7 @@ public sealed class ApiClient : IDisposable
     public Task LogoutAsync(string username) => PostAsync<JsonElement>("/api/accounts/logout", new { username });
     public Task SelectAccountAsync(string username) => PostAsync<JsonElement>("/api/accounts/select", new { username });
     public Task<ParsedTarget> ParseAsync(string url) => PostAsync<ParsedTarget>("/api/parse", new { url });
-    public Task<AppInfo> AppInfoAsync(string appId) => GetAsync<AppInfo>($"/api/appinfo/{Uri.EscapeDataString(appId)}");
+    public Task<SteamAppInfo> AppInfoAsync(string appId) => GetAsync<SteamAppInfo>($"/api/appinfo/{Uri.EscapeDataString(appId)}");
     public Task<LibraryStatus> LibraryStatusAsync(string username) => GetAsync<LibraryStatus>($"/api/library/status?username={Uri.EscapeDataString(username)}");
     public Task<LibraryStatus> LibrarySyncAsync(string username, bool full) => PostAsync<LibraryStatus>("/api/library/sync", new { username, mode = full ? "full" : "incremental", force_full_sync = full });
 
