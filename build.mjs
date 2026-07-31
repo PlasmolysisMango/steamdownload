@@ -417,7 +417,6 @@ async function buildFlutterPoc() {
     run(flutter, [
       'create',
       '--template=module',
-      '--platforms=android',
       '--project-name', 'steamdl_flutter_poc',
       '--overwrite',
       flutterPocProject,
