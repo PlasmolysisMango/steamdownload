@@ -1,4 +1,4 @@
-name: Build SteamDl (Flutter + .NET engine)
+name: Build SteamDl (MAUI + .NET engine)
 
 on:
   workflow_dispatch:
@@ -19,23 +19,20 @@ on:
     paths:
       - "src/**"
       - "external/**"
+      - "build.mjs"
       - ".github/workflows/build-apk.yml"
 
-# 同一分支/PR 只保留最新一次构建，取消排队中的旧任务
 concurrency:
   group: build-apk-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write # release 任务需要创建/更新 GitHub Release 并上传附件
+  contents: write
 
 env:
-  FLUTTER_VERSION: "3.29.3"
-  # develop 分支提交固定构建 Debug APK；tag 推送和手动默认构建 Release
   CONFIG: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == 'develop')) && 'Debug' || (inputs.config || 'Release') }}
 
 jobs:
-  # .NET 引擎 sidecar，Android 版（linux-bionic-arm64 自包含单文件）
   build-engine-bionic:
     runs-on: ubuntu-latest
     steps:
@@ -60,11 +57,6 @@ jobs:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
           DOTNET_CLI_TELEMETRY_OPTOUT: "1"
         run: |
-          # 重要: linux-bionic-arm64 的 self-contained + PublishSingleFile 在 .NET SDK 里
-          # 是已知缺陷(dotnet/sdk#35518,缺 singlefilehost/libhostfxr.so 等文件),
-          # 实设在设备上报 "You must install .NET"。因此此处不用 single-file,
-          # 改为官方验证稳定的普通 self-contained 发布(产出一堆松散文件),
-          # 再由 Android 侧打包整个目录为 asset zip,运行时解包到 filesDir 后 exec。
           dotnet publish src/SteamDl.Server/SteamDl.Server.csproj \
             -c Release \
             -r linux-bionic-arm64 \
@@ -87,7 +79,6 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # Flutter APK（引擎与 OpenSSL 以 jniLibs 注入）
   build-apk:
     runs-on: ubuntu-latest
     needs: build-engine-bionic
@@ -108,6 +99,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -117,12 +113,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
+      - name: Install MAUI Android workload
+        run: dotnet workload install maui-android
 
       - name: Download engine artifact
         uses: actions/download-artifact@v4
@@ -135,16 +127,12 @@ jobs:
           set -euo pipefail
           ENGINE_DIR=engine-download
           chmod +x "$ENGINE_DIR/steamdl-engine"
-          # OpenSSL 3(bionic 预编译, KDAB/android_openssl, Apache-2.0)。
-          # 与引擎同目录打包时可直接使用 .NET opensslshim 期望的版本化 SONAME，
-          # 无需再在设备上建符号链接。
           curl -fsSL --retry 3 \
             https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libssl_3.so \
             -o "$ENGINE_DIR/libssl.so.3"
           curl -fsSL --retry 3 \
             https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libcrypto_3.so \
             -o "$ENGINE_DIR/libcrypto.so.3"
-          # SQLitePCLRaw 的 native SQLite 库；JobStore 初始化需要 dlopen libe_sqlite3.so
           curl -fsSL --retry 3 \
             https://www.nuget.org/api/v2/package/SQLitePCLRaw.lib.e_sqlite3.android/2.1.10 \
             -o /tmp/sqlite-android.nupkg
@@ -161,24 +149,21 @@ jobs:
           with open('$ENGINE_DIR/libe_sqlite3.so', 'wb') as f:
               f.write(data)
           PY
-          # 引擎目录整体打包为 Android 原生 asset zip，运行时解包到 filesDir 后 exec，
-          # 避开 jniLibs 只允许 lib*.so 命名的限制，所有松散文件保持原名一起打包。
-          mkdir -p src/steamdl_app/android/app/src/main/assets
+          mkdir -p src/SteamDl.Maui/Assets
           python3 - <<PY
           import os
           import zipfile
           src = '$ENGINE_DIR'
-          out = 'src/steamdl_app/android/app/src/main/assets/engine-bionic.zip'
+          out = 'src/SteamDl.Maui/Assets/engine-bionic.zip'
           with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
               for name in sorted(os.listdir(src)):
                   path = os.path.join(src, name)
                   if os.path.isfile(path):
                       z.write(path, name)
           PY
-          # Mozilla CA 证书包，供引擎 SSL_CERT_FILE 使用
           curl -fsSL --retry 3 https://curl.se/ca/cacert.pem \
-            -o src/steamdl_app/assets/cacert.pem
-          ls -lh src/steamdl_app/android/app/src/main/assets src/steamdl_app/assets
+            -o src/SteamDl.Maui/Assets/cacert.pem
+          ls -lh src/SteamDl.Maui/Assets
 
       - name: Prepare signing keystore
         if: env.HAS_RELEASE_KEYSTORE == 'true'
@@ -190,12 +175,7 @@ jobs:
           import base64
           import os
           import sys
-
-          raw = (os.environ.get('ANDROID_KEYSTORE_BASE64') or '').strip()
-          if raw.startswith('ANDROID_KEYSTORE_BASE64=') or '\nANDROID_KEYSTORE_BASE64=' in raw:
-              print('::error::ANDROID_KEYSTORE_BASE64 Secret 填写错误：Secret Value 只能填写等号右侧的 base64 内容。')
-              sys.exit(1)
-          raw = raw.strip('"\'')
+          raw = (os.environ.get('ANDROID_KEYSTORE_BASE64') or '').strip().strip('"\'')
           compact = ''.join(raw.split())
           if not compact:
               print('::error::ANDROID_KEYSTORE_BASE64 Secret 为空')
@@ -213,63 +193,35 @@ jobs:
           print(f'Keystore restored: {len(data)} bytes')
           PY
 
-      - name: Bootstrap gradle wrapper (from Flutter cache)
-        run: |
-          set -euo pipefail
-          # 不使用 runner 系统 Gradle(版本过新与 AGP 不兼容)，
-          # 复用 Flutter SDK 缓存的 wrapper；-n 保留仓库内钉住的 gradle-wrapper.properties
-          flutter precache --android
-          cp -rn "$FLUTTER_ROOT/bin/cache/artifacts/gradle_wrapper/." src/steamdl_app/android/
-          chmod +x src/steamdl_app/android/gradlew
-          ls -la src/steamdl_app/android
-
-      - name: Flutter analyze
-        working-directory: src/steamdl_app
-        run: |
-          set -o pipefail
-          flutter pub get 2>&1 | tee /tmp/analyze.log
-          flutter analyze --no-fatal-infos 2>&1 | tee -a /tmp/analyze.log
-
-      - name: Upload analyze log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: analyze-log-${{ github.sha }}
-          path: /tmp/analyze.log
-          if-no-files-found: ignore
-          retention-days: 3
-
-      - name: Build APK
-        working-directory: src/steamdl_app
+      - name: Build MAUI APK
         env:
           ANDROID_KEYSTORE: ${{ env.HAS_RELEASE_KEYSTORE == 'true' && format('{0}/.tools/keystore/steamdl-release.keystore', github.workspace) || '' }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_STORE_PASS: ${{ secrets.ANDROID_STORE_PASS }}
           ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
         run: |
-          set -o pipefail
-          if [ "${{ env.CONFIG }}" = "Debug" ]; then
-            flutter build apk --debug --verbose 2>&1 | tail -300 | tee /tmp/apk-build.log
-            cp build/app/outputs/flutter-apk/app-debug.apk /tmp/steamdl.apk
-          else
-            flutter build apk --release --verbose 2>&1 | tail -300 | tee /tmp/apk-build.log
-            cp build/app/outputs/flutter-apk/app-release.apk /tmp/steamdl.apk
+          set -euo pipefail
+          args=(publish src/SteamDl.Maui/SteamDl.Maui.csproj -f net9.0-android -c "${{ env.CONFIG }}" -r android-arm64 -p:AndroidPackageFormat=apk -p:AndroidCreatePackagePerAbi=false)
+          if [ "${HAS_RELEASE_KEYSTORE}" = "true" ] && [ "${{ env.CONFIG }}" = "Release" ]; then
+            args+=(-p:AndroidKeyStore=true -p:AndroidSigningKeyStore="$ANDROID_KEYSTORE" -p:AndroidSigningKeyAlias="$ANDROID_KEY_ALIAS" -p:AndroidSigningKeyPass="$ANDROID_KEY_PASS" -p:AndroidSigningStorePass="$ANDROID_STORE_PASS")
           fi
+          dotnet "${args[@]}" 2>&1 | tee /tmp/apk-build.log
+          apk=$(find src/SteamDl.Maui/bin/${{ env.CONFIG }}/net9.0-android -name '*.apk' | head -n 1)
+          test -n "$apk"
+          mkdir -p artifacts/direct
+          cp "$apk" "artifacts/direct/${{ steps.resolve-config.outputs.apk-name }}"
+          ls -lh artifacts/direct
 
       - name: Upload APK build log
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: apk-build-log-${{ github.sha }}
           path: /tmp/apk-build.log
           if-no-files-found: ignore
           retention-days: 3
-
-      - name: Prepare direct APK file
-        run: |
-          mkdir -p artifacts/direct
-          cp /tmp/steamdl.apk "artifacts/direct/${{ steps.resolve-config.outputs.apk-name }}"
-          ls -lh artifacts/direct
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -280,7 +232,6 @@ jobs:
           retention-days: 14
           compression-level: 0
 
-  # Windows 桌面（Flutter Windows + win-x64 引擎 sidecar 同包）
   build-windows:
     runs-on: windows-2022
     outputs:
@@ -302,14 +253,12 @@ jobs:
         with:
           dotnet-version: "9.0.x"
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
+      - name: Install MAUI workload
+        shell: pwsh
+        run: dotnet workload install maui
 
       - name: Publish engine (win-x64)
+        shell: pwsh
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: "1"
         run: |
@@ -325,28 +274,18 @@ jobs:
           Copy-Item $sqlite artifacts/engine-win/e_sqlite3.dll -Force
           Get-ChildItem artifacts/engine-win | Format-Table Name,Length
 
-      - name: Generate Windows runner scaffold
-        working-directory: src/steamdl_app
+      - name: Publish MAUI Windows app
+        shell: pwsh
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
         run: |
-          flutter config --enable-windows-desktop
-          flutter create --platforms=windows --project-name steamdl_app .
-
-      - name: Build Flutter Windows
-        working-directory: src/steamdl_app
-        shell: bash
-        run: |
-          set -o pipefail
-          flutter pub get 2>&1 | tee ../../win-build.log
-          flutter build windows --release --verbose 2>&1 | tail -300 | tee -a ../../win-build.log
-
-      - name: Upload Windows build log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: win-build-log-${{ github.sha }}
-          path: win-build.log
-          if-no-files-found: ignore
-          retention-days: 3
+          dotnet publish src/SteamDl.Maui/SteamDl.Maui.csproj `
+            -f net9.0-windows10.0.19041.0 `
+            -c Release `
+            -r win-x64 `
+            -p:WindowsPackageType=None `
+            -p:SelfContained=true `
+            -o artifacts/maui-win
 
       - name: Package
         shell: bash
@@ -354,7 +293,7 @@ jobs:
           set -euo pipefail
           OUT=artifacts/windows/SteamDl
           mkdir -p "$OUT/engine"
-          cp -r src/steamdl_app/build/windows/x64/runner/Release/. "$OUT/"
+          cp -r artifacts/maui-win/. "$OUT/"
           cp -r artifacts/engine-win/. "$OUT/engine/"
           cd artifacts/windows
           7z a "../${{ steps.meta.outputs.zip-name }}" SteamDl
@@ -370,7 +309,6 @@ jobs:
   release:
     needs: [build-apk, build-windows]
     runs-on: ubuntu-latest
-    # 仅当推送了 tag，或手动触发时显式填写了 release_tag 时，才发布（PR 不发布）
     if: github.event_name != 'pull_request' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     steps:
       - name: Resolve release tag

@@ -11,12 +11,21 @@ src/SteamDl.Core/wwwroot/assets/
 src/SteamDl.Web/dist/
 src/SteamDl.Web/.vite/
 
+# generated MAUI Android engine assets
+src/SteamDl.Maui/Assets/engine-bionic.zip
+src/SteamDl.Maui/Assets/cacert.pem
+
 # local tooling and dependency caches
 .tools/
 **/node_modules/
 .npm/
 .yarn/
 .pnpm-store/
+
+# deprecated Flutter UI remnants (replaced by src/SteamDl.Maui)
+src/steamdl_app/
+.dart_tool/
+.pub-cache/
 
 # runtime artifacts and downloaded content
 *.log

@@ -1,4 +1,4 @@
-// 内嵌 HTTP 服务:仅提供 /api 契约,作为 Flutter 原生 UI 与下载引擎之间的
+// 内嵌 HTTP 服务:仅提供 /api 契约,作为 MAUI UI 与下载引擎之间的
 // 本机 IPC 通道(127.0.0.1)。基于 HttpListener,无 ASP.NET Core 依赖,
 // 可同时运行于桌面(.NET)与 Android(linux-bionic sidecar)。
 using System;
@@ -69,7 +69,7 @@ namespace SteamDl.Core
             {
                 if (method == "GET" && !path.StartsWith("/api/", StringComparison.Ordinal))
                 {
-                    // 非 API 请求返回服务标识,供 Flutter 侧健康检查/发现使用
+                    // 非 API 请求返回服务标识,供 UI 侧健康检查/发现使用
                     await WriteJsonAsync(ctx, 200, new JsonObject
                     {
                         ["service"] = "steamdl",

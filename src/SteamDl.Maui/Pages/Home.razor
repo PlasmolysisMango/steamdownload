@@ -1,0 +1,311 @@
+@page "/"
+@using SteamDl.Maui.Services
+@inject AppState State
+@implements IDisposable
+
+<div class="shell">
+    <header class="topbar">
+        <div>
+            <div class="eyebrow">SteamDl</div>
+            <h1>Steam 下载器</h1>
+        </div>
+        <button class="secondary" @onclick="RefreshAsync" disabled="@State.Busy">刷新</button>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(State.Toast))
+    {
+        <div class="toast">@State.Toast</div>
+    }
+
+    @if (!State.EngineReady)
+    {
+        <section class="card warning">
+            <h2>引擎启动中</h2>
+            <p>@State.StatusText</p>
+            @if (!string.IsNullOrWhiteSpace(State.Diagnostics))
+            {
+                <pre>@State.Diagnostics</pre>
+            }
+            <button @onclick="InitializeAsync" disabled="@State.Busy">重试</button>
+        </section>
+    }
+    else
+    {
+        <nav class="tabs">
+            @foreach (var tab in Tabs)
+            {
+                <button class="@(ActiveTab == tab.Key ? "active" : null)" @onclick="() => ActiveTab = tab.Key">@tab.Value</button>
+            }
+        </nav>
+
+        @switch (ActiveTab)
+        {
+            case "accounts":
+                <section class="grid two">
+                    <div class="card">
+                        <h2>账号登录</h2>
+                        <label>用户名<input @bind="LoginUsername" autocomplete="username" /></label>
+                        <label>密码<input type="password" @bind="LoginPassword" autocomplete="current-password" /></label>
+                        <label class="inline"><input type="checkbox" @bind="RememberPassword" />记住密码</label>
+                        <button @onclick="LoginAsync" disabled="@State.Busy">登录</button>
+                        @if (State.Login.Busy)
+                        {
+                            <div class="prompt">
+                                <p>@State.Login.Prompt</p>
+                                <input @bind="LoginAnswer" type="@(State.Login.PromptSecret ? "password" : "text")" />
+                                <button @onclick="SubmitLoginInputAsync">提交验证</button>
+                            </div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(State.Login.Error))
+                        {
+                            <p class="error">@State.Login.Error</p>
+                        }
+                    </div>
+                    <div class="card">
+                        <h2>已保存账号</h2>
+                        @if (State.Accounts.Count == 0)
+                        {
+                            <p class="muted">暂无账号。</p>
+                        }
+                        @foreach (var account in State.AccountDetails)
+                        {
+                            <div class="row item">
+                                <div>
+                                    <strong>@account.Username</strong>
+                                    <small>@(account.LoggedIn ? "已登录" : "未登录") @(account.HasSavedPassword ? " · 已保存密码" : null)</small>
+                                </div>
+                                <div class="actions">
+                                    <button class="secondary" @onclick="() => SelectAccountAsync(account.Username)">选择</button>
+                                    <button class="secondary" @onclick="() => ReloginAsync(account.Username)">恢复</button>
+                                    <button class="danger" @onclick="() => LogoutAsync(account.Username)">退出</button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </section>
+                break;
+            case "download":
+                <section class="card">
+                    <h2>新建下载</h2>
+                    <label>Steam 链接 / steam:// 协议 / AppID<input @bind="DownloadUrl" placeholder="https://store.steampowered.com/app/..." /></label>
+                    <div class="row wrap">
+                        <button @onclick="ParseAsync" disabled="@State.Busy">解析</button>
+                        <span class="muted">解析结果：@ParsedKind @ParsedId @AppName</span>
+                    </div>
+                    <div class="grid two">
+                        <label>账号<select @bind="SelectedAccount">@foreach (var name in State.Accounts){<option value="@name">@name</option>}</select></label>
+                        <label>平台<select @bind="PlatformOs"><option>windows</option><option>linux</option><option>macos</option></select></label>
+                        <label>Depot（可选）<input @bind="Depot" /></label>
+                        <label>安装目录名（可选）<input @bind="InstallDir" /></label>
+                    </div>
+                    <label>保存目录<input @bind="OutputDir" /></label>
+                    <div class="row wrap">
+                        <button class="secondary" @onclick="PickDirectoryAsync">选择目录</button>
+                        <button @onclick="CreateJobAsync" disabled="@(State.Busy || string.IsNullOrWhiteSpace(ParsedId))">创建任务</button>
+                    </div>
+                </section>
+                break;
+            case "library":
+                <section class="card">
+                    <div class="row">
+                        <div>
+                            <h2>游戏库</h2>
+                            <p class="muted">@State.Library.Message (@State.Library.Progress%)</p>
+                        </div>
+                        <div class="actions">
+                            <button class="secondary" @onclick="() => SyncLibraryAsync(false)">增量同步</button>
+                            <button @onclick="() => SyncLibraryAsync(true)">全量同步</button>
+                        </div>
+                    </div>
+                    <div class="list">
+                        @foreach (var game in State.Library.Items ?? Enumerable.Empty<LibraryGame>())
+                        {
+                            <div class="row item">
+                                <div>
+                                    <strong>@game.Name</strong>
+                                    <small>App @game.AppId · @game.SizeText @((game.IsDownloaded ? " · 已下载" : ""))</small>
+                                </div>
+                                <button @onclick="() => UseGame(game)">下载</button>
+                            </div>
+                        }
+                    </div>
+                </section>
+                break;
+            case "jobs":
+                <section class="card">
+                    <div class="row">
+                        <h2>任务</h2>
+                        <button class="danger" @onclick="DeleteAllJobsAsync">清空任务</button>
+                    </div>
+                    @foreach (var job in State.Jobs)
+                    {
+                        <div class="job item">
+                            <div class="row">
+                                <div>
+                                    <strong>@job.DisplayTitle</strong>
+                                    <small>@StateText(job.State) · @job.ProgressText</small>
+                                </div>
+                                <span>@job.Percent.ToString("0")%</span>
+                            </div>
+                            <progress max="100" value="@job.Percent"></progress>
+                            @if (!string.IsNullOrWhiteSpace(job.Prompt))
+                            {
+                                <div class="row wrap"><input @bind="JobAnswer" type="@(job.PromptSecret ? "password" : "text")" placeholder="@job.Prompt" /><button @onclick="() => SendJobInputAsync(job.JobId)">提交</button></div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(job.Error)) { <p class="error">@job.Error</p> }
+                            <div class="actions">
+                                <button class="secondary" @onclick='() => JobActionAsync(job.JobId, "pause")'>暂停</button>
+                                <button class="secondary" @onclick='() => JobActionAsync(job.JobId, "resume")'>继续</button>
+                                <button class="secondary" @onclick='() => JobActionAsync(job.JobId, "retry")'>重试</button>
+                                <button class="danger" @onclick="() => DeleteJobAsync(job.JobId)">删除</button>
+                            </div>
+                        </div>
+                    }
+                </section>
+                break;
+            case "settings":
+                <section class="card">
+                    <h2>设置</h2>
+                    <label>默认保存目录<input @bind="SettingsDownloadDir" /></label>
+                    <label>默认平台<select @bind="SettingsPlatform"><option>windows</option><option>linux</option><option>macos</option></select></label>
+                    <label>最大并发<input type="number" min="1" max="64" @bind="SettingsMaxDownloads" /></label>
+                    <label class="inline"><input type="checkbox" @bind="SettingsAutoResume" />自动恢复未完成任务</label>
+                    <div class="row wrap"><button class="secondary" @onclick="PickSettingsDirectoryAsync">选择目录</button><button @onclick="SaveSettingsAsync">保存设置</button></div>
+                    <h3>诊断日志</h3>
+                    <pre>@State.Diagnostics</pre>
+                </section>
+                break;
+        }
+    }
+</div>
+
+@code {
+    static readonly IReadOnlyDictionary<string, string> Tabs = new Dictionary<string, string>
+    {
+        ["accounts"] = "账号",
+        ["download"] = "下载",
+        ["library"] = "游戏库",
+        ["jobs"] = "任务",
+        ["settings"] = "设置",
+    };
+
+    string ActiveTab = "accounts";
+    string LoginUsername = "";
+    string LoginPassword = "";
+    string LoginAnswer = "";
+    bool RememberPassword = true;
+    string DownloadUrl = "";
+    string ParsedKind = "app";
+    string ParsedId = "";
+    string AppName = "";
+    string SelectedAccount = "";
+    string PlatformOs = "windows";
+    string Depot = "";
+    string OutputDir = "";
+    string InstallDir = "";
+    string JobAnswer = "";
+    string SettingsDownloadDir = "";
+    string SettingsPlatform = "windows";
+    int SettingsMaxDownloads = 8;
+    bool SettingsAutoResume = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += StateHasChanged;
+        await InitializeAsync();
+    }
+
+    async Task InitializeAsync()
+    {
+        await State.InitializeAsync();
+        PullSettings();
+        SelectedAccount = State.SelectedAccount;
+        PlatformOs = State.Settings.DefaultPlatformOs;
+        OutputDir = State.Settings.DefaultDownloadDir;
+    }
+
+    async Task RefreshAsync() => await State.RefreshAsync();
+    async Task LoginAsync() => await State.LoginAsync(LoginUsername, LoginPassword, RememberPassword);
+    async Task SubmitLoginInputAsync() { await State.SubmitLoginInputAsync(LoginAnswer); LoginAnswer = ""; }
+    async Task SelectAccountAsync(string username) { await State.SelectAccountAsync(username); SelectedAccount = username; }
+    async Task ReloginAsync(string username) => await State.ReloginAsync(username);
+    async Task LogoutAsync(string username) => await State.LogoutAsync(username);
+    async Task SyncLibraryAsync(bool full) => await State.SyncLibraryAsync(SelectedAccount, full);
+
+    async Task ParseAsync()
+    {
+        var result = await State.ParseAsync(DownloadUrl);
+        ParsedKind = result.Kind;
+        ParsedId = result.Id;
+        AppName = "";
+        if (ParsedKind == "app" && !string.IsNullOrWhiteSpace(ParsedId))
+        {
+            var info = await State.LoadAppInfoAsync(ParsedId);
+            if (info is not null)
+            {
+                AppName = info.Name;
+                InstallDir = info.InstallDir;
+            }
+        }
+    }
+
+    async Task PickDirectoryAsync()
+    {
+        var dir = await State.PickDirectoryAsync();
+        if (!string.IsNullOrWhiteSpace(dir)) OutputDir = dir;
+    }
+
+    async Task PickSettingsDirectoryAsync()
+    {
+        var dir = await State.PickDirectoryAsync();
+        if (!string.IsNullOrWhiteSpace(dir)) SettingsDownloadDir = dir;
+    }
+
+    async Task CreateJobAsync()
+    {
+        await State.CreateJobAsync(ParsedKind, ParsedId, SelectedAccount, PlatformOs, Depot, OutputDir, InstallDir, AppName);
+        ActiveTab = "jobs";
+    }
+
+    void UseGame(LibraryGame game)
+    {
+        ParsedKind = "app";
+        ParsedId = game.AppId;
+        AppName = game.Name;
+        InstallDir = game.InstallDir;
+        ActiveTab = "download";
+    }
+
+    async Task JobActionAsync(string jobId, string action) => await State.JobActionAsync(jobId, action);
+    async Task SendJobInputAsync(string jobId) { await State.JobInputAsync(jobId, JobAnswer); JobAnswer = ""; }
+    async Task DeleteJobAsync(string jobId) => await State.DeleteJobAsync(jobId, false);
+    async Task DeleteAllJobsAsync() => await State.DeleteAllJobsAsync(false);
+
+    void PullSettings()
+    {
+        SettingsDownloadDir = State.Settings.DefaultDownloadDir;
+        SettingsPlatform = State.Settings.DefaultPlatformOs;
+        SettingsMaxDownloads = State.Settings.MaxDownloads;
+        SettingsAutoResume = State.Settings.AutoResume;
+    }
+
+    async Task SaveSettingsAsync()
+    {
+        await State.SaveSettingsAsync(State.Settings with
+        {
+            DefaultDownloadDir = SettingsDownloadDir,
+            DefaultPlatformOs = SettingsPlatform,
+            MaxDownloads = SettingsMaxDownloads,
+            AutoResume = SettingsAutoResume,
+            SelectedAccount = SelectedAccount,
+        });
+        PullSettings();
+    }
+
+    static string StateText(string state) => JobStateText.TryGetValue(state, out var text) ? text : state;
+
+    public void Dispose()
+    {
+        State.Changed -= StateHasChanged;
+    }
+}

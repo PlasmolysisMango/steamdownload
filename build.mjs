@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SteamDl build helper (Flutter UI + .NET engine sidecar 架构).
+// SteamDl build helper (MAUI UI + .NET engine sidecar 架构).
 // 正式构建一律通过 GitHub Actions(.github/workflows/build-apk.yml)完成,
 // 本脚本只保留本地开发辅助命令,无 npm 依赖。
 
@@ -22,7 +22,8 @@ const runtime = opts.runtime || process.env.RUNTIME ||
   (isWin ? 'win-x64' : process.platform === 'darwin' ? 'osx-x64' : 'linux-x64');
 
 const serverProject = path.join(root, 'src', 'SteamDl.Server', 'SteamDl.Server.csproj');
-const flutterApp = path.join(root, 'src', 'steamdl_app');
+const mauiProject = path.join(root, 'src', 'SteamDl.Maui', 'SteamDl.Maui.csproj');
+const mauiDir = path.join(root, 'src', 'SteamDl.Maui');
 const engineOut = path.join(root, 'artifacts', 'engine');
 
 main().catch(err => {
@@ -36,7 +37,8 @@ async function main() {
     case 'doctor': return doctor();
     case 'run': return runEngine();
     case 'publish-engine': return publishEngine();
-    case 'flutter-run': return flutterRun();
+    case 'maui-run': return mauiRun();
+    case 'maui-build': return mauiBuild();
     case 'clean': return clean();
     default:
       help();
@@ -45,7 +47,7 @@ async function main() {
 }
 
 function help() {
-  console.log(`SteamDl build helper (Flutter + .NET sidecar)
+  console.log(`SteamDl build helper (MAUI + .NET sidecar)
 
 正式构建(APK/桌面包)一律通过 GitHub Actions 完成:
   - push 到 develop 分支构建 Debug APK
@@ -53,8 +55,10 @@ function help() {
 
 本地开发辅助命令:
   node build.mjs doctor                       检查本机工具链
-  node build.mjs run --port=8630              本机启动 .NET 引擎(供 flutter run 连接)
-  node build.mjs flutter-run                  启动 Flutter UI(需引擎已运行或桌面自动拉起)
+  node build.mjs run --port=8630              本机启动 .NET 引擎(供 MAUI UI 连接)
+  node build.mjs maui-run                     启动 MAUI UI(需要对应平台 MAUI workload)
+  node build.mjs maui-build --framework=net9.0-android
+                                              轻量触发 MAUI 项目构建(可能需要 workload)
   node build.mjs publish-engine --runtime=${runtime}
                                               发布引擎 sidecar 到 artifacts/engine
   node build.mjs clean                        清理构建产物
@@ -73,6 +77,14 @@ function parseOptions(optionArgs) {
 }
 
 function findOnPath(name) {
+  const localCandidates = {
+    dotnet: [path.join(root, '.tools', 'dotnet', isWin ? 'dotnet.exe' : 'dotnet')],
+    java: [path.join(root, '.tools', 'jdk', 'bin', isWin ? 'java.exe' : 'java')],
+  }[name] || [];
+  for (const candidate of localCandidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
   const paths = (process.env.PATH || '').split(path.delimiter);
   const names = isWin ? [name, `${name}.exe`, `${name}.bat`, `${name}.cmd`] : [name];
   for (const dir of paths) {
@@ -115,7 +127,6 @@ function doctor() {
   console.log(`OS: ${os.type()} ${os.release()} ${os.arch()}`);
   for (const [name, hint] of [
     ['dotnet', '.NET 9 SDK: https://dot.net'],
-    ['flutter', 'Flutter SDK: https://flutter.dev'],
     ['java', 'JDK 17(仅 Android 本地构建需要)'],
   ]) {
     const found = findOnPath(name);
@@ -157,9 +168,16 @@ function publishEngine() {
   console.log(`引擎 sidecar 产物: ${engineOut}`);
 }
 
-function flutterRun() {
-  const flutter = requireCommand('flutter', '请安装 Flutter SDK。');
-  run(flutter, ['run'], { cwd: flutterApp });
+function mauiRun() {
+  const dotnet = requireCommand('dotnet', '请安装 .NET 9 SDK 与 MAUI workload。');
+  const framework = opts.framework || process.env.TARGET_FRAMEWORK || (isWin ? 'net9.0-windows10.0.19041.0' : 'net9.0-android');
+  run(dotnet, ['run', '--project', mauiProject, '-f', framework, '-c', config], { cwd: mauiDir, env: dotnetEnv() });
+}
+
+function mauiBuild() {
+  const dotnet = requireCommand('dotnet', '请安装 .NET 9 SDK 与 MAUI workload。');
+  const framework = opts.framework || process.env.TARGET_FRAMEWORK || 'net9.0-android';
+  run(dotnet, ['build', mauiProject, '-f', framework, '-c', config], { env: dotnetEnv() });
 }
 
 function clean() {
@@ -169,8 +187,8 @@ function clean() {
     path.join(root, 'src', 'SteamDl.Core', 'obj'),
     path.join(root, 'src', 'SteamDl.Server', 'bin'),
     path.join(root, 'src', 'SteamDl.Server', 'obj'),
-    path.join(flutterApp, 'build'),
-    path.join(flutterApp, '.dart_tool'),
+    path.join(root, 'src', 'SteamDl.Maui', 'bin'),
+    path.join(root, 'src', 'SteamDl.Maui', 'obj'),
   ]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }

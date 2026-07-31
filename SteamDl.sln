@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteamDl.Core", "src\SteamDl
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteamDl.Server", "src\SteamDl.Server\SteamDl.Server.csproj", "{DC8B7ED8-6CBA-4B0C-B8A7-C2D286EE830D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteamDl.Maui", "src\SteamDl.Maui\SteamDl.Maui.csproj", "{B96A4934-2766-4E7D-82B8-3D9C5300916E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -23,6 +25,10 @@ Global
 		{DC8B7ED8-6CBA-4B0C-B8A7-C2D286EE830D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DC8B7ED8-6CBA-4B0C-B8A7-C2D286EE830D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DC8B7ED8-6CBA-4B0C-B8A7-C2D286EE830D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B96A4934-2766-4E7D-82B8-3D9C5300916E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B96A4934-2766-4E7D-82B8-3D9C5300916E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B96A4934-2766-4E7D-82B8-3D9C5300916E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B96A4934-2766-4E7D-82B8-3D9C5300916E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -30,5 +36,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{68C1B1AB-E4D7-4012-B861-52B0ED5DAAC2} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{DC8B7ED8-6CBA-4B0C-B8A7-C2D286EE830D} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{B96A4934-2766-4E7D-82B8-3D9C5300916E} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

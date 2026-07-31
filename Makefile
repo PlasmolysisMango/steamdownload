@@ -12,7 +12,7 @@ RUNTIME ?= linux-x64
 
 COMMON_ARGS := --config=$(CONFIG) --port=$(PORT) --runtime=$(RUNTIME)
 
-.PHONY: help doctor run publish-engine flutter-run clean
+.PHONY: help doctor run publish-engine maui-run maui-build clean
 
 help:
 	@$(BUILD) help $(COMMON_ARGS)
@@ -26,8 +26,11 @@ run:
 publish-engine:
 	@$(BUILD) publish-engine $(COMMON_ARGS)
 
-flutter-run:
-	@$(BUILD) flutter-run $(COMMON_ARGS)
+maui-run:
+	@$(BUILD) maui-run $(COMMON_ARGS)
+
+maui-build:
+	@$(BUILD) maui-build $(COMMON_ARGS)
 
 clean:
 	@$(BUILD) clean $(COMMON_ARGS)
