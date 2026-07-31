@@ -1,10 +1,18 @@
-// 前台服务:从 nativeLibraryDir exec .NET 引擎 sidecar(libsteamdl_engine.so),
-// 配常驻通知防止下载中进程被系统回收;进程退出自动重拉。
+// 前台服务:将 .NET 引擎 sidecar 自包含发布整个目录(作为 Android 原生 asset zip
+// 随 APK 打包)解包到 filesDir 后 exec;配常驻通知防止下载中进程被系统回收;
+// 进程退出自动重拉。
+//
+// 为何不用 single-file/jniLibs: linux-bionic-arm64 的 self-contained +
+// PublishSingleFile 在 .NET SDK 里是已知缺陷(dotnet/sdk#35518),产物缺
+// libhostfxr.so 等文件,在设备上报 "You must install .NET"。因此 CI 改用
+// 普通 self-contained 发布(产出一堆松散文件),整个目录打包为
+// assets/engine-bionic.zip;这里在首次启动(或 APK 更新后)解包到
+// filesDir/engine-bionic,保持所有文件同目录,让 apphost/hostfxr 按同目录
+// 规则相互找到。
 //
 // bionic .NET 运行时的两个关键环境准备:
-// 1. OpenSSL: Android 无系统 libssl,APK 内打包 libssl_3.so/libcrypto_3.so,
-//    这里在数据目录建 libssl.so.3/libcrypto.so.3 符号链接并通过 LD_LIBRARY_PATH
-//    暴露给 .NET 的 opensslshim(它按版本化名称 dlopen)。
+// 1. OpenSSL: Android 无系统 libssl,CI 已将 libssl.so.3/libcrypto.so.3(版本化
+//    SONAME)与引擎同目录打包,无需再在设备上建符号链接。
 // 2. CA 证书: bionic 下 .NET 找不到系统证书库,从 flutter assets 释放 cacert.pem
 //    并用 SSL_CERT_FILE 指定。
 package app.steamdl
@@ -18,10 +26,10 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.system.Os
 import android.util.Log
 import java.io.File
 import java.io.OutputStream
+import java.util.zip.ZipInputStream
 
 class EngineService : Service() {
 
@@ -129,34 +137,27 @@ class EngineService : Service() {
     }
 
     private fun launchEngine() {
-        val nativeDir = applicationInfo.nativeLibraryDir
-        logNativeLibraryState(nativeDir)
-        val engine = File(nativeDir, "libsteamdl_engine.so")
+        val engineDir = prepareEngineBundle()
+        val engine = File(engineDir, "steamdl-engine")
         if (!engine.exists()) {
             throw IllegalStateException("engine binary missing: $engine")
         }
+        engine.setExecutable(true, false)
         if (!engine.canExecute()) {
             Log.w(TAG, "engine binary is not marked executable: $engine")
         }
 
-        requireNativeLibrary(nativeDir, "libhostfxr.so")
-        requireNativeLibrary(nativeDir, "libhostpolicy.so")
-        requireNativeLibrary(nativeDir, "libcoreclr.so")
-        requireNativeLibrary(nativeDir, "libe_sqlite3.so")
-        requireNativeLibrary(nativeDir, "libssl_3.so")
-        requireNativeLibrary(nativeDir, "libcrypto_3.so")
-
         val filesDir = filesDir.absolutePath
-        val sslDir = prepareOpenSslLinks(nativeDir)
         val certFile = prepareCaCertificates()
         val dataDir = File(filesDir, "steamdl").apply { mkdirs() }
         val bundleDir = File(filesDir, "bundle").apply { mkdirs() }
 
         val builder = ProcessBuilder(engine.absolutePath)
             .redirectErrorStream(true)
+            .directory(engineDir)
         val env = builder.environment()
         env["HOME"] = filesDir
-        env["DOTNET_ROOT"] = nativeDir
+        env["DOTNET_ROOT"] = engineDir.absolutePath
         env["TMPDIR"] = cacheDir.absolutePath
         env["PORT"] = PORT.toString()
         env["STEAMDL_BIND_HOST"] = "127.0.0.1"
@@ -165,7 +166,7 @@ class EngineService : Service() {
         env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
         env["DOTNET_EnableWriteXorExecute"] = "0"
         env["DOTNET_BUNDLE_EXTRACT_BASE_DIR"] = bundleDir.absolutePath
-        env["LD_LIBRARY_PATH"] = "${sslDir.absolutePath}:$nativeDir"
+        env["LD_LIBRARY_PATH"] = engineDir.absolutePath
         if (certFile != null) {
             env["SSL_CERT_FILE"] = certFile.absolutePath
         }
@@ -189,55 +190,64 @@ class EngineService : Service() {
         }, "steamdl-engine-log").start()
     }
 
-    /** 记录关键 native 依赖是否随 APK 解包到 nativeLibraryDir。 */
-    private fun logNativeLibraryState(nativeDir: String) {
+    /**
+     * 从 assets/engine-bionic.zip 解包 .NET 引擎自包含发布到 filesDir/engine-bionic,
+     * 仅在首次运行或 APK 更新后重新解包(用 APK 安装/更新时间作为缓存标识)。
+     */
+    private fun prepareEngineBundle(): File {
+        val dir = File(filesDir, "engine-bionic")
+        val marker = File(filesDir, "engine-bionic.version")
+        val lastUpdate = try {
+            packageManager.getPackageInfo(packageName, 0).lastUpdateTime.toString()
+        } catch (_: Exception) {
+            "unknown"
+        }
+        if (dir.isDirectory && File(dir, "steamdl-engine").exists() &&
+            marker.exists() && marker.readText() == lastUpdate
+        ) {
+            return dir
+        }
+
+        Log.i(TAG, "extracting engine bundle to $dir")
+        dir.deleteRecursively()
+        dir.mkdirs()
+        assets.open("engine-bionic.zip").use { input ->
+            ZipInputStream(input).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory) {
+                        val outFile = File(dir, entry.name)
+                        outFile.outputStream().use { output -> zip.copyTo(output) }
+                    }
+                    zip.closeEntry()
+                    entry = zip.nextEntry
+                }
+            }
+        }
+        File(dir, "steamdl-engine").setExecutable(true, false)
+        marker.writeText(lastUpdate)
+        logNativeLibraryState(dir)
+        return dir
+    }
+
+    /** 记录引擎包里关键依赖是否解包成功。 */
+    private fun logNativeLibraryState(engineDir: File) {
         for (name in listOf(
-            "libsteamdl_engine.so",
+            "steamdl-engine",
             "libhostfxr.so",
             "libhostpolicy.so",
             "libcoreclr.so",
             "libe_sqlite3.so",
-            "libssl_3.so",
-            "libcrypto_3.so",
+            "libssl.so.3",
+            "libcrypto.so.3",
         )) {
-            val file = File(nativeDir, name)
+            val file = File(engineDir, name)
             if (file.exists()) {
-                Log.i(TAG, "native lib ok: ${file.absolutePath} (${file.length()} bytes)")
+                Log.i(TAG, "engine file ok: ${file.absolutePath} (${file.length()} bytes)")
             } else {
-                Log.e(TAG, "native lib missing: ${file.absolutePath}")
+                Log.e(TAG, "engine file missing: ${file.absolutePath}")
             }
         }
-    }
-
-    private fun requireNativeLibrary(nativeDir: String, name: String) {
-        val file = File(nativeDir, name)
-        if (!file.exists()) {
-            throw IllegalStateException("native lib missing: ${file.absolutePath}")
-        }
-    }
-
-    /** 为 .NET opensslshim 准备版本化命名的 OpenSSL 符号链接。 */
-    private fun prepareOpenSslLinks(nativeDir: String): File {
-        val sslDir = File(filesDir, "ssl").apply { mkdirs() }
-        val links = mapOf(
-            "libssl.so.3" to "libssl_3.so",
-            "libcrypto.so.3" to "libcrypto_3.so",
-        )
-        for ((linkName, target) in links) {
-            val targetFile = File(nativeDir, target)
-            if (!targetFile.exists()) {
-                Log.w(TAG, "openssl lib missing: $targetFile")
-                continue
-            }
-            val link = File(sslDir, linkName)
-            try {
-                if (link.exists()) link.delete()
-                Os.symlink(targetFile.absolutePath, link.absolutePath)
-            } catch (e: Exception) {
-                Log.w(TAG, "symlink failed for $linkName: ${e.message}")
-            }
-        }
-        return sslDir
     }
 
     /** 从 flutter assets 释放 CA 证书包。 */

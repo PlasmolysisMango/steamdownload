@@ -21,8 +21,8 @@ android {
         applicationId = "app.steamdl"
         minSdk = 26
         // targetSdk 固定 28:
-        // .NET linux-bionic 单文件引擎启动时会把原生库解包到应用数据目录再
-        // dlopen/exec,Android 10+(targetSdk>=29)禁止从可写目录执行,
+        // .NET 引擎自包含发布会从 assets 解包到应用数据目录再 exec,
+        // Android 10+(targetSdk>=29)禁止从可写目录执行,
         // 自用侧载包降 targetSdk 保持 legacy 行为;同时获得 legacy 外置存储
         // (WRITE_EXTERNAL_STORAGE 即可写 /sdcard/Download,无需 MANAGE_EXTERNAL_STORAGE)。
         targetSdk = 28
@@ -57,16 +57,6 @@ android {
             if (hasReleaseKeystore()) {
                 signingConfig = signingConfigs.release
             }
-        }
-    }
-
-    packagingOptions {
-        jniLibs {
-            // 引擎/openssl 以 lib*.so 形式打进 APK,必须解包到 nativeLibraryDir
-            // 才能被前台服务 exec(等价 extractNativeLibs=true)
-            useLegacyPackaging = true
-            // .NET 单文件引擎不是标准 ELF 依赖闭包,跳过 strip 与依赖检查
-            keepDebugSymbols += "**/libsteamdl_engine.so"
         }
     }
 }

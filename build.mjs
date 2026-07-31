@@ -134,18 +134,26 @@ function runEngine() {
 function publishEngine() {
   const dotnet = requireCommand('dotnet', '请安装 .NET 9 SDK。');
   fs.rmSync(engineOut, { recursive: true, force: true });
-  run(dotnet, [
+  // linux-bionic-arm64(Android) 的 self-contained + PublishSingleFile 在 .NET SDK 里
+  // 是已知缺陷(dotnet/sdk#35518),会产出缺 libhostfxr.so 的可执行文件,
+  // 在设备上报 "You must install .NET"。该 RID 跳过 single-file,保留松散发布。
+  const isBionic = runtime === 'linux-bionic-arm64';
+  const publishArgs = [
     'publish', serverProject,
     '-c', config,
     '-r', runtime,
     '--self-contained', 'true',
     '-p:SelfContained=true',
     '-p:PublishSelfContained=true',
-    '-p:PublishSingleFile=true',
-    '-p:IncludeNativeLibrariesForSelfExtract=false',
-    '-p:EnableCompressionInSingleFile=true',
-    '-o', engineOut,
-  ], { env: dotnetEnv() });
+  ];
+  if (!isBionic) {
+    publishArgs.push(
+      '-p:PublishSingleFile=true',
+      '-p:EnableCompressionInSingleFile=true',
+    );
+  }
+  publishArgs.push('-o', engineOut);
+  run(dotnet, publishArgs, { env: dotnetEnv() });
   console.log(`引擎 sidecar 产物: ${engineOut}`);
 }
 

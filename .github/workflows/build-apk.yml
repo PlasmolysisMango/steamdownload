@@ -60,18 +60,23 @@ jobs:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
           DOTNET_CLI_TELEMETRY_OPTOUT: "1"
         run: |
+          # 重要: linux-bionic-arm64 的 self-contained + PublishSingleFile 在 .NET SDK 里
+          # 是已知缺陷(dotnet/sdk#35518,缺 singlefilehost/libhostfxr.so 等文件),
+          # 实设在设备上报 "You must install .NET"。因此此处不用 single-file,
+          # 改为官方验证稳定的普通 self-contained 发布(产出一堆松散文件),
+          # 再由 Android 侧打包整个目录为 asset zip,运行时解包到 filesDir 后 exec。
           dotnet publish src/SteamDl.Server/SteamDl.Server.csproj \
             -c Release \
             -r linux-bionic-arm64 \
             --self-contained true \
             -p:SelfContained=true \
             -p:PublishSelfContained=true \
-            -p:PublishSingleFile=true \
-            -p:IncludeNativeLibrariesForSelfExtract=false \
-            -p:EnableCompressionInSingleFile=true \
             -o artifacts/engine-bionic
           test -f artifacts/engine-bionic/steamdl-engine
           test -f artifacts/engine-bionic/libhostfxr.so
+          test -f artifacts/engine-bionic/libhostpolicy.so
+          test -f artifacts/engine-bionic/libcoreclr.so
+          chmod +x artifacts/engine-bionic/steamdl-engine
           ls -lh artifacts/engine-bionic
 
       - name: Upload engine artifact
@@ -125,25 +130,25 @@ jobs:
           name: engine-bionic-${{ github.sha }}
           path: engine-download
 
-      - name: Assemble jniLibs (engine + SQLite + OpenSSL) and assets (cacert)
+      - name: Assemble engine bundle (asset zip) + CA cert
         run: |
           set -euo pipefail
-          JNI=src/steamdl_app/android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p "$JNI"
-          # .NET 引擎单文件 → 伪装成 lib*.so 打入 APK，解包后由前台服务 exec。
-          # linux-bionic apphost 启动早期需要先加载 libhostfxr.so，因此 native runtime
-          # 不能只依赖 single-file 自解包，必须作为独立 .so 一起放进 nativeLibraryDir。
-          cp engine-download/steamdl-engine "$JNI/libsteamdl_engine.so"
-          cp engine-download/*.so "$JNI/"
-          chmod +x "$JNI/libsteamdl_engine.so"
-          test -f "$JNI/libhostfxr.so"
-          test -f "$JNI/libhostpolicy.so"
-          test -f "$JNI/libcoreclr.so"
+          ENGINE_DIR=engine-download
+          chmod +x "$ENGINE_DIR/steamdl-engine"
+          # OpenSSL 3(bionic 预编译, KDAB/android_openssl, Apache-2.0)。
+          # 与引擎同目录打包时可直接使用 .NET opensslshim 期望的版本化 SONAME，
+          # 无需再在设备上建符号链接。
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libssl_3.so \
+            -o "$ENGINE_DIR/libssl.so.3"
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libcrypto_3.so \
+            -o "$ENGINE_DIR/libcrypto.so.3"
           # SQLitePCLRaw 的 native SQLite 库；JobStore 初始化需要 dlopen libe_sqlite3.so
           curl -fsSL --retry 3 \
             https://www.nuget.org/api/v2/package/SQLitePCLRaw.lib.e_sqlite3.android/2.1.10 \
             -o /tmp/sqlite-android.nupkg
-          python3 - <<'PY'
+          python3 - <<PY
           import zipfile
           nupkg = '/tmp/sqlite-android.nupkg'
           aar = '/tmp/SQLitePCLRaw.lib.e_sqlite3.android.aar'
@@ -153,20 +158,27 @@ jobs:
               f.write(data)
           with zipfile.ZipFile(aar) as z:
               data = z.read('jni/arm64-v8a/libe_sqlite3.so')
-          with open('src/steamdl_app/android/app/src/main/jniLibs/arm64-v8a/libe_sqlite3.so', 'wb') as f:
+          with open('$ENGINE_DIR/libe_sqlite3.so', 'wb') as f:
               f.write(data)
           PY
-          # OpenSSL 3(bionic 预编译, KDAB/android_openssl, Apache-2.0)
-          curl -fsSL --retry 3 \
-            https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libssl_3.so \
-            -o "$JNI/libssl_3.so"
-          curl -fsSL --retry 3 \
-            https://raw.githubusercontent.com/KDAB/android_openssl/master/ssl_3/arm64-v8a/libcrypto_3.so \
-            -o "$JNI/libcrypto_3.so"
+          # 引擎目录整体打包为 Android 原生 asset zip，运行时解包到 filesDir 后 exec，
+          # 避开 jniLibs 只允许 lib*.so 命名的限制，所有松散文件保持原名一起打包。
+          mkdir -p src/steamdl_app/android/app/src/main/assets
+          python3 - <<PY
+          import os
+          import zipfile
+          src = '$ENGINE_DIR'
+          out = 'src/steamdl_app/android/app/src/main/assets/engine-bionic.zip'
+          with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+              for name in sorted(os.listdir(src)):
+                  path = os.path.join(src, name)
+                  if os.path.isfile(path):
+                      z.write(path, name)
+          PY
           # Mozilla CA 证书包，供引擎 SSL_CERT_FILE 使用
           curl -fsSL --retry 3 https://curl.se/ca/cacert.pem \
             -o src/steamdl_app/assets/cacert.pem
-          ls -lh "$JNI" src/steamdl_app/assets
+          ls -lh src/steamdl_app/android/app/src/main/assets src/steamdl_app/assets
 
       - name: Prepare signing keystore
         if: env.HAS_RELEASE_KEYSTORE == 'true'
