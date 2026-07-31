@@ -105,7 +105,7 @@ public sealed class MainActivity : MauiAppCompatActivity
         tcs.TrySetResult(ResolveTreeUriToPath(uri));
     }
 
-    string? ResolveTreeUriToPath(Android.Net.Uri uri)
+    string? ResolveTreeUriToPath(global::Android.Net.Uri uri)
     {
         try
         {

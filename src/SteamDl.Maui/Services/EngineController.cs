@@ -52,9 +52,9 @@ public sealed class EngineController : IAsyncDisposable
         }
     }
 
-    async Task SpawnDesktopAsync()
+    Task SpawnDesktopAsync()
     {
-        if (_process is { HasExited: false }) return;
+        if (_process is { HasExited: false }) return Task.CompletedTask;
         var exeDir = AppContext.BaseDirectory;
         var exeName = OperatingSystem.IsWindows() ? "steamdl-engine.exe" : "steamdl-engine";
         var candidates = new[]
@@ -91,6 +91,7 @@ public sealed class EngineController : IAsyncDisposable
             _lastExitCode = _process.ExitCode;
             _process = null;
         });
+        return Task.CompletedTask;
     }
 
     async Task PipeOutputAsync(StreamReader reader)
