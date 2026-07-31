@@ -139,7 +139,11 @@ function publishEngine() {
     '-c', config,
     '-r', runtime,
     '--self-contained', 'true',
+    '-p:SelfContained=true',
+    '-p:PublishSelfContained=true',
     '-p:PublishSingleFile=true',
+    '-p:IncludeNativeLibrariesForSelfExtract=true',
+    '-p:IncludeAllContentForSelfExtract=true',
     '-p:EnableCompressionInSingleFile=true',
     '-o', engineOut,
   ], { env: dotnetEnv() });
