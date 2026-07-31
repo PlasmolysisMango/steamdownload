@@ -139,6 +139,9 @@ class EngineService : Service() {
             Log.w(TAG, "engine binary is not marked executable: $engine")
         }
 
+        requireNativeLibrary(nativeDir, "libhostfxr.so")
+        requireNativeLibrary(nativeDir, "libhostpolicy.so")
+        requireNativeLibrary(nativeDir, "libcoreclr.so")
         requireNativeLibrary(nativeDir, "libe_sqlite3.so")
         requireNativeLibrary(nativeDir, "libssl_3.so")
         requireNativeLibrary(nativeDir, "libcrypto_3.so")
@@ -153,6 +156,7 @@ class EngineService : Service() {
             .redirectErrorStream(true)
         val env = builder.environment()
         env["HOME"] = filesDir
+        env["DOTNET_ROOT"] = nativeDir
         env["TMPDIR"] = cacheDir.absolutePath
         env["PORT"] = PORT.toString()
         env["STEAMDL_BIND_HOST"] = "127.0.0.1"
@@ -189,6 +193,9 @@ class EngineService : Service() {
     private fun logNativeLibraryState(nativeDir: String) {
         for (name in listOf(
             "libsteamdl_engine.so",
+            "libhostfxr.so",
+            "libhostpolicy.so",
+            "libcoreclr.so",
             "libe_sqlite3.so",
             "libssl_3.so",
             "libcrypto_3.so",

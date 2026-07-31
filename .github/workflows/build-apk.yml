@@ -67,17 +67,18 @@ jobs:
             -p:SelfContained=true \
             -p:PublishSelfContained=true \
             -p:PublishSingleFile=true \
-            -p:IncludeNativeLibrariesForSelfExtract=true \
-            -p:IncludeAllContentForSelfExtract=true \
+            -p:IncludeNativeLibrariesForSelfExtract=false \
             -p:EnableCompressionInSingleFile=true \
             -o artifacts/engine-bionic
+          test -f artifacts/engine-bionic/steamdl-engine
+          test -f artifacts/engine-bionic/libhostfxr.so
           ls -lh artifacts/engine-bionic
 
       - name: Upload engine artifact
         uses: actions/upload-artifact@v4
         with:
           name: engine-bionic-${{ github.sha }}
-          path: artifacts/engine-bionic/steamdl-engine
+          path: artifacts/engine-bionic
           if-no-files-found: error
           retention-days: 3
 
@@ -129,9 +130,15 @@ jobs:
           set -euo pipefail
           JNI=src/steamdl_app/android/app/src/main/jniLibs/arm64-v8a
           mkdir -p "$JNI"
-          # .NET 引擎单文件 → 伪装成 lib*.so 打入 APK，解包后由前台服务 exec
+          # .NET 引擎单文件 → 伪装成 lib*.so 打入 APK，解包后由前台服务 exec。
+          # linux-bionic apphost 启动早期需要先加载 libhostfxr.so，因此 native runtime
+          # 不能只依赖 single-file 自解包，必须作为独立 .so 一起放进 nativeLibraryDir。
           cp engine-download/steamdl-engine "$JNI/libsteamdl_engine.so"
+          cp engine-download/*.so "$JNI/"
           chmod +x "$JNI/libsteamdl_engine.so"
+          test -f "$JNI/libhostfxr.so"
+          test -f "$JNI/libhostpolicy.so"
+          test -f "$JNI/libcoreclr.so"
           # SQLitePCLRaw 的 native SQLite 库；JobStore 初始化需要 dlopen libe_sqlite3.so
           curl -fsSL --retry 3 \
             https://www.nuget.org/api/v2/package/SQLitePCLRaw.lib.e_sqlite3.android/2.1.10 \
