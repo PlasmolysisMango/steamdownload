@@ -13,5 +13,14 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="true"
       android:allowBackup="true">
+    <!-- Flutter add-to-app PoC:仅在 EnableFlutterPoc=true 打包了 Flutter embedding 后由 MainActivity 启动。 -->
+    <meta-data android:name="flutterEmbedding" android:value="2" />
+    <activity
+        android:name="io.flutter.embedding.android.FlutterActivity"
+        android:exported="false"
+        android:theme="@style/AppTheme"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+        android:hardwareAccelerated="true"
+        android:windowSoftInputMode="adjustResize" />
   </application>
 </manifest>

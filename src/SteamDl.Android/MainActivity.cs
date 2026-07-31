@@ -1,4 +1,5 @@
-// Android 入口:WebView 壳加载本地服务提供的同一份 index.html。
+// Android 入口:默认 WebView 壳加载本地服务提供的同一份 index.html。
+// Flutter PoC 启用时,.NET-for-Android 仍作为 APK 宿主,MainActivity 仅尝试启动 Flutter add-to-app UI。
 // 服务端(WebApi + JobManager)运行在前台服务中,保证锁屏/切后台时下载不被系统回收。
 using System;
 using System.IO;
@@ -9,6 +10,7 @@ using Android.OS;
 using Android.Provider;
 using Android.Views;
 using Android.Webkit;
+using Android.Widget;
 using SteamDl.Core;
 
 namespace SteamDl.Android
@@ -42,6 +44,20 @@ namespace SteamDl.Android
                 StartService(intent);
             }
 
+            WebApi.PickDirectoryHandler = PickDirectory;
+
+#if ENABLE_FLUTTER_POC
+            if (TryLaunchFlutterUi())
+            {
+                return;
+            }
+#endif
+
+            LoadWebViewUi();
+        }
+
+        void LoadWebViewUi()
+        {
             _webView = new WebView(this);
             _webView.Settings.JavaScriptEnabled = true;
             _webView.Settings.DomStorageEnabled = true;
@@ -49,7 +65,6 @@ namespace SteamDl.Android
             _webView.Settings.BuiltInZoomControls = false;
             _webView.Settings.DisplayZoomControls = false;
             _webView.SetWebViewClient(new WebViewClient());
-            WebApi.PickDirectoryHandler = PickDirectory;
             SetContentView(_webView);
 
             // 给服务一点启动时间后加载；权限弹窗/系统设置页延后，避免用户点击图标后先被带离应用。
@@ -57,6 +72,35 @@ namespace SteamDl.Android
                 _webView.LoadUrl($"http://127.0.0.1:{(global::SteamDl.Android.DownloadService.Port)}/"), 600);
             _webView.PostDelayed(RequestRuntimePermissions, 1500);
         }
+
+#if ENABLE_FLUTTER_POC
+        bool TryLaunchFlutterUi()
+        {
+            try
+            {
+                // 不在 C# 中绑定 Flutter Java API,只通过类名验证并启动 AAR 内的 FlutterActivity。
+                global::Java.Lang.Class.ForName("io.flutter.embedding.android.FlutterActivity");
+                var flutterIntent = new Intent();
+                flutterIntent.SetClassName(PackageName, "io.flutter.embedding.android.FlutterActivity");
+                StartActivity(flutterIntent);
+
+                var placeholder = new TextView(this)
+                {
+                    Text = "SteamDl Flutter PoC 已启动。按返回键可回到此宿主页；下载服务继续由 .NET foreground service 保持。",
+                    Gravity = GravityFlags.Center,
+                };
+                placeholder.SetPadding(32, 32, 32, 32);
+                SetContentView(placeholder);
+                placeholder.PostDelayed(RequestRuntimePermissions, 1500);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Toast.MakeText(this, "Flutter PoC 启动失败,回退 WebView: " + ex.GetType().Name, ToastLength.Long)?.Show();
+                return false;
+            }
+        }
+#endif
 
         void RequestRuntimePermissions()
         {

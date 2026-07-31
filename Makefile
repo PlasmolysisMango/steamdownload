@@ -22,7 +22,7 @@ DOTNET_DOCKER_IMAGE ?= m.daocloud.io/mcr.microsoft.com/dotnet/sdk:9.0
 BASE_ARGS := --port=$(PORT) --runtime=$(RUNTIME) --android-api=$(ANDROID_API) --android-build-tools=$(ANDROID_BUILD_TOOLS) --dotnet-channel=$(DOTNET_CHANNEL) --jdk-version=$(JDK_VERSION) --jdk-url=$(JDK_URL) --android-cmdline-tools-url=$(ANDROID_CMDLINE_TOOLS_URL) --nuget-source=$(NUGET_SOURCE) --npm-registry=$(NPM_REGISTRY) --web-docker-image=$(WEB_DOCKER_IMAGE) --dotnet-docker-image=$(DOTNET_DOCKER_IMAGE)
 COMMON_ARGS := --config=$(CONFIG) $(BASE_ARGS)
 
-.PHONY: help doctor install-deps install-dotnet install-jdk install-android-sdk install-workload restore build-web docker-build-web build build-server docker-build docker-build-server run publish-server docker-publish-server build-apk publish-apk docker-build-apk docker-publish-apk docker-debug-apk docker-release-apk clean clean-artifacts
+.PHONY: help doctor install-deps install-dotnet install-jdk install-android-sdk install-workload restore build-web build-flutter-poc docker-build-web build build-server docker-build docker-build-server run publish-server docker-publish-server build-apk publish-apk flutter-poc-apk docker-build-apk docker-publish-apk docker-debug-apk docker-release-apk clean clean-artifacts
 
 help:
 	@$(BUILD) help $(COMMON_ARGS)
@@ -51,6 +51,9 @@ restore:
 build-web:
 	@$(BUILD) build-web $(COMMON_ARGS)
 
+build-flutter-poc:
+	@$(BUILD) build-flutter-poc $(COMMON_ARGS)
+
 docker-build-web:
 	@$(BUILD) docker-build-web $(COMMON_ARGS)
 
@@ -71,6 +74,9 @@ docker-publish-server:
 
 build-apk publish-apk:
 	@$(BUILD) build-apk $(COMMON_ARGS)
+
+flutter-poc-apk:
+	@$(BUILD) build-apk --enable-flutter-poc=true $(COMMON_ARGS)
 
 docker-build-apk docker-publish-apk:
 	@$(BUILD) docker-build-apk $(COMMON_ARGS)

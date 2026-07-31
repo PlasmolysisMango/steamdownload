@@ -13,10 +13,19 @@
     <!-- 自用侧载包:仅构建 arm64,产物更小 -->
     <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <!-- PoC 开关:由 .NET-for-Android 宿主打包 Flutter add-to-app AAR,默认关闭以保持现有构建稳定。 -->
+    <EnableFlutterPoc Condition="'$(EnableFlutterPoc)' == ''">false</EnableFlutterPoc>
+    <DefineConstants Condition="'$(EnableFlutterPoc)' == 'true'">$(DefineConstants);ENABLE_FLUTTER_POC</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\SteamDl.Core\SteamDl.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Flutter add-to-app PoC:build.mjs build-flutter-poc 会把 Flutter AAR/JAR 收集到 FlutterPoc/libs。 -->
+  <ItemGroup Condition="'$(EnableFlutterPoc)' == 'true'">
+    <AndroidLibrary Include="FlutterPoc\libs\*.aar" Bind="false" Pack="true" />
+    <AndroidLibrary Include="FlutterPoc\libs\*.jar" Bind="false" Pack="true" />
   </ItemGroup>
 
   <!-- protobuf-net/SteamKit2 依赖反射,禁止裁剪器移除其成员,否则 Release 包登录/存档会失败 -->

@@ -11,6 +11,13 @@ src/SteamDl.Core/wwwroot/assets/
 src/SteamDl.Web/dist/
 src/SteamDl.Web/.vite/
 
+# generated Flutter PoC artifacts; keep only the hand-written PoC Dart entrypoint
+src/SteamDl.FlutterPoc/*
+!src/SteamDl.FlutterPoc/lib/
+src/SteamDl.FlutterPoc/lib/*
+!src/SteamDl.FlutterPoc/lib/main.dart
+src/SteamDl.Android/FlutterPoc/libs/
+
 # local tooling and dependency caches
 .tools/
 **/node_modules/
@@ -44,3 +51,4 @@ steamdl.db
 *.swo
 .DS_Store
 Thumbs.db
+/1.patch

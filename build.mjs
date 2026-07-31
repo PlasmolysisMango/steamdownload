@@ -57,7 +57,12 @@ const androidSdkRoot = process.env.ANDROID_SDK_ROOT || process.env.ANDROID_HOME 
 const sdkManager = path.join(androidSdkRoot, 'cmdline-tools', 'latest', 'bin', isWin ? 'sdkmanager.bat' : 'sdkmanager');
 const serverProject = path.join(root, 'src', 'SteamDl.Server', 'SteamDl.Server.csproj');
 const androidProject = path.join(root, 'src', 'SteamDl.Android', 'SteamDl.Android.csproj');
+const androidProjectDir = path.dirname(androidProject);
 const webProject = path.join(root, 'src', 'SteamDl.Web');
+const flutterPocProject = path.join(root, 'src', 'SteamDl.FlutterPoc');
+const flutterPocLibs = path.join(androidProjectDir, 'FlutterPoc', 'libs');
+const flutterCommand = opts.flutter || process.env.FLUTTER || 'flutter';
+const flutterPocEnabled = opts.enableFlutterPoc === 'true' || process.env.ENABLE_FLUTTER_POC === '1';
 const serverOut = path.join(root, 'artifacts', 'server');
 const apkOut = path.join(root, 'artifacts', 'apk');
 const localSigningEnvFile = opts.signingEnv || process.env.ANDROID_SIGNING_ENV || path.join(toolsDir, 'keystore', 'github-actions-secrets.env');
@@ -91,6 +96,7 @@ async function main() {
     case 'install-deps': await installAllDeps(); return;
     case 'restore': return restoreServer();
     case 'build-web': return buildWeb();
+    case 'build-flutter-poc': return buildFlutterPoc();
     case 'docker-build-web': return dockerBuildWeb();
     case 'build': return buildServer();
     case 'docker-build':
@@ -111,7 +117,7 @@ async function main() {
 }
 
 function help() {
-  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build-web\n  node build.mjs docker-build-web\n  node build.mjs build\n  node build.mjs docker-build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs docker-publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --nuget-source=${nugetSources.join(',')}\n  node build.mjs build-apk --keystore=/path/release.keystore --key-alias=steamdl --store-pass=*** --key-pass=***\n  node build.mjs docker-build-apk --config=Release\n  node build.mjs clean\n  node build.mjs clean-artifacts\n\nDownload/build source options:\n  --cn-mirror=true or CN_MIRROR=1 (\u4f18\u5148\u4f7f\u7528\u56fd\u5185\u955c\u50cf\uff0c\u9ed8\u8ba4\u5173\u95ed)\n  --nuget-source=<url[,url...]> or NUGET_SOURCE=<url[,url...]>\n  --npm-registry=${npmRegistry} or NPM_REGISTRY=${npmRegistry}\n  --jdk-url=<url> or JDK_URL=<url>\n  --android-cmdline-tools-url=<url> or ANDROID_CMDLINE_TOOLS_URL=<url>\n  --jdk-version=17.0.19_10 or JDK_VERSION=17.0.19_10\n  --web-docker-image=${webDockerImage} or WEB_DOCKER_IMAGE=${webDockerImage}\n  --dotnet-docker-image=${dotnetDockerImage} or DOTNET_DOCKER_IMAGE=${dotnetDockerImage}\n  --force-web=true or FORCE_WEB_BUILD=1\n  --force-restore=true or FORCE_RESTORE=1\n  --force-apk=true or FORCE_APK_BUILD=1\n  --skip-probe=true or SKIP_SOURCE_PROBE=1 (关闭构建前的源可达性探测)\n  --probe-timeout=4000 or SOURCE_PROBE_TIMEOUT=4000 (单个源探测超时毫秒)\n  --download-timeout=20000 or DOWNLOAD_TIMEOUT=20000 (单次下载无活动超时毫秒)\n  --signing-env=.tools/keystore/github-actions-secrets.env or ANDROID_SIGNING_ENV=<file> (本地 Release 签名配置文件)\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  All sources default to official endpoints: NuGet=${nugetSources.join(' -> ')}, npm=${npmRegistry}.\n  Pass --cn-mirror=true (or CN_MIRROR=1) to prefer domestic mirrors for NuGet/npm/JDK/Android cmdline-tools/Docker images.\n  Any single source can still be overridden explicitly (--nuget-source/--npm-registry/--jdk-url/--android-cmdline-tools-url/--web-docker-image/--dotnet-docker-image) regardless of --cn-mirror.\n  Before build/install-deps/restore actually run, NuGet/npm/JDK/Android cmdline-tools sources are probed with a short HEAD request; unreachable ones are pushed to the back and (unless explicitly overridden) official/mirror fallbacks are auto-added so a dead source fails fast instead of hanging.\n  Release APKs are always signed. Debug APKs also use the same keystore when .tools/keystore/github-actions-secrets.env, ANDROID_KEYSTORE_BASE64 or an existing keystore is available; otherwise they fall back to the Android debug signer.\n  install-deps installs/restores Web npm, .NET SDK, NuGet packages, JDK, Android SDK and Android workload.\n  Incremental builds skip fresh Web output, fresh Android restore assets and fresh APK output unless force flags are used.\n  Non-docker commands always use local toolchain. Docker is only used by explicit docker-* commands.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n  APK artifacts are standalone installable packages; build-apk forces EmbedAssembliesIntoApk=true so Debug artifacts do not rely on fast deployment.\n`);
+  console.log(`SteamDl build helper\n\nUsage:\n  node build.mjs doctor\n  node build.mjs install-deps\n  node build.mjs build-web\n  node build.mjs build-flutter-poc\n  node build.mjs docker-build-web\n  node build.mjs build\n  node build.mjs docker-build\n  node build.mjs run --port=8630\n  node build.mjs publish-server --config=Release --runtime=${runtime}\n  node build.mjs docker-publish-server --config=Release --runtime=${runtime}\n  node build.mjs build-apk --config=Release --android-api=35 --android-build-tools=35.0.0\n  node build.mjs build-apk --enable-flutter-poc=true\n  node build.mjs build-apk --nuget-source=${nugetSources.join(',')}\n  node build.mjs build-apk --keystore=/path/release.keystore --key-alias=steamdl --store-pass=*** --key-pass=***\n  node build.mjs docker-build-apk --config=Release\n  node build.mjs clean\n  node build.mjs clean-artifacts\n\nDownload/build source options:\n  --cn-mirror=true or CN_MIRROR=1 (\u4f18\u5148\u4f7f\u7528\u56fd\u5185\u955c\u50cf\uff0c\u9ed8\u8ba4\u5173\u95ed)\n  --nuget-source=<url[,url...]> or NUGET_SOURCE=<url[,url...]>\n  --npm-registry=${npmRegistry} or NPM_REGISTRY=${npmRegistry}\n  --jdk-url=<url> or JDK_URL=<url>\n  --android-cmdline-tools-url=<url> or ANDROID_CMDLINE_TOOLS_URL=<url>\n  --jdk-version=17.0.19_10 or JDK_VERSION=17.0.19_10\n  --web-docker-image=${webDockerImage} or WEB_DOCKER_IMAGE=${webDockerImage}\n  --dotnet-docker-image=${dotnetDockerImage} or DOTNET_DOCKER_IMAGE=${dotnetDockerImage}\n  --force-web=true or FORCE_WEB_BUILD=1\n  --force-restore=true or FORCE_RESTORE=1\n  --force-apk=true or FORCE_APK_BUILD=1\n  --enable-flutter-poc=true or ENABLE_FLUTTER_POC=1 (启用 .NET-for-Android 宿主嵌入 Flutter AAR 的 PoC)\n  --flutter=flutter or FLUTTER=/path/to/flutter (Flutter SDK 命令路径)\n  --skip-probe=true or SKIP_SOURCE_PROBE=1 (关闭构建前的源可达性探测)\n  --probe-timeout=4000 or SOURCE_PROBE_TIMEOUT=4000 (单个源探测超时毫秒)\n  --download-timeout=20000 or DOWNLOAD_TIMEOUT=20000 (单次下载无活动超时毫秒)\n  --signing-env=.tools/keystore/github-actions-secrets.env or ANDROID_SIGNING_ENV=<file> (本地 Release 签名配置文件)\n\nNotes:\n  Missing portable tools are installed under .tools/.\n  All sources default to official endpoints: NuGet=${nugetSources.join(' -> ')}, npm=${npmRegistry}.\n  Pass --cn-mirror=true (or CN_MIRROR=1) to prefer domestic mirrors for NuGet/npm/JDK/Android cmdline-tools/Docker images.\n  Any single source can still be overridden explicitly (--nuget-source/--npm-registry/--jdk-url/--android-cmdline-tools-url/--web-docker-image/--dotnet-docker-image) regardless of --cn-mirror.\n  Before build/install-deps/restore actually run, NuGet/npm/JDK/Android cmdline-tools sources are probed with a short HEAD request; unreachable ones are pushed to the back and (unless explicitly overridden) official/mirror fallbacks are auto-added so a dead source fails fast instead of hanging.\n  Release APKs are always signed. Debug APKs also use the same keystore when .tools/keystore/github-actions-secrets.env, ANDROID_KEYSTORE_BASE64 or an existing keystore is available; otherwise they fall back to the Android debug signer.\n  install-deps installs/restores Web npm, .NET SDK, NuGet packages, JDK, Android SDK and Android workload.\n  Incremental builds skip fresh Web output, fresh Android restore assets and fresh APK output unless force flags are used.\n  Non-docker commands always use local toolchain. Docker is only used by explicit docker-* commands.\n  Android APK build requires .NET SDK + Android workload + JDK 17 + Android SDK.\n  Flutter PoC build requires Flutter SDK. Run build-flutter-poc first, then build-apk --enable-flutter-poc=true.\n  APK artifacts are standalone installable packages; build-apk forces EmbedAssembliesIntoApk=true so Debug artifacts do not rely on fast deployment.\n`);
 }
 
 function parseOptions(optionArgs) {
@@ -347,6 +353,8 @@ function apkInputMtime() {
   return Math.max(
     newestMtime(path.join(root, 'src', 'SteamDl.Android')),
     newestMtime(path.join(root, 'src', 'SteamDl.Core')),
+    flutterPocEnabled ? newestMtime(flutterPocProject) : 0,
+    flutterPocEnabled ? newestMtime(path.join(androidProjectDir, 'FlutterPoc')) : 0,
     shouldSignApk() ? newestMtime(keystore) : 0,
     shouldSignApk() ? newestMtime(localSigningEnvFile) : 0,
   );
@@ -358,7 +366,7 @@ function apkStampFile() {
 }
 
 function apkStampValue() {
-  return JSON.stringify({ config, targetFramework: projectTargetFramework(androidProject), inputMtime: apkInputMtime() });
+  return JSON.stringify({ config, targetFramework: projectTargetFramework(androidProject), enableFlutterPoc: flutterPocEnabled, inputMtime: apkInputMtime() });
 }
 
 function isApkOutputFresh() {
@@ -395,6 +403,142 @@ async function installWebDeps() {
     await ensureNpmRegistryProbed();
     run(npm, ['install', '--registry', npmRegistry], { cwd: webProject, env: npmEnv() });
   }
+}
+
+async function buildFlutterPoc() {
+  const flutter = executable(flutterCommand) || (exists(flutterCommand) ? flutterCommand : null);
+  if (!flutter) {
+    throw new Error('未找到 Flutter SDK。请安装 Flutter，或通过 --flutter=/path/to/flutter 指定命令路径。');
+  }
+
+  section('构建 Flutter add-to-app PoC AAR');
+  mkdirp(path.dirname(flutterPocProject));
+  if (!exists(path.join(flutterPocProject, 'android'))) {
+    run(flutter, [
+      'create',
+      '--template=module',
+      '--platforms=android',
+      '--project-name', 'steamdl_flutter_poc',
+      '--overwrite',
+      flutterPocProject,
+    ]);
+  }
+
+  writeFlutterPocMain();
+  run(flutter, ['pub', 'get'], { cwd: flutterPocProject });
+  run(flutter, ['build', 'aar', '--target-platform', 'android-arm64', '--no-debug', '--no-profile'], { cwd: flutterPocProject });
+  collectFlutterPocLibraries();
+}
+
+function writeFlutterPocMain() {
+  const libDir = path.join(flutterPocProject, 'lib');
+  mkdirp(libDir);
+  fs.writeFileSync(path.join(libDir, 'main.dart'), flutterPocMainSource());
+}
+
+function flutterPocMainSource() {
+  return `import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const SteamDlFlutterPocApp());
+}
+
+class SteamDlFlutterPocApp extends StatelessWidget {
+  const SteamDlFlutterPocApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'SteamDl Flutter PoC',
+      theme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true),
+      home: const SteamDlFlutterPocPage(),
+    );
+  }
+}
+
+class SteamDlFlutterPocPage extends StatefulWidget {
+  const SteamDlFlutterPocPage({super.key});
+
+  @override
+  State<SteamDlFlutterPocPage> createState() => _SteamDlFlutterPocPageState();
+}
+
+class _SteamDlFlutterPocPageState extends State<SteamDlFlutterPocPage> {
+  String _status = '未请求本地服务';
+  bool _loading = false;
+
+  Future<void> _checkService() async {
+    setState(() {
+      _loading = true;
+      _status = '正在请求 http://127.0.0.1:8630/api/config ...';
+    });
+
+    try {
+      final client = HttpClient();
+      final request = await client.getUrl(Uri.parse('http://127.0.0.1:8630/api/config'));
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      client.close(force: true);
+      final preview = body.length > 1200 ? '\${body.substring(0, 1200)}...' : body;
+      setState(() => _status = 'HTTP \\${response.statusCode}\\n\\n$preview');
+    } catch (e) {
+      setState(() => _status = '请求失败：$e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('SteamDl Flutter PoC')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('这是由 .NET-for-Android 宿主启动的 Flutter add-to-app 页面。'),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _loading ? null : _checkService,
+              child: Text(_loading ? '请求中...' : '检查本地 .NET 服务'),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: SingleChildScrollView(
+                child: SelectableText(_status),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+`;
+}
+
+function collectFlutterPocLibraries() {
+  const repo = path.join(flutterPocProject, 'build', 'host', 'outputs', 'repo');
+  if (!exists(repo)) throw new Error(`未找到 Flutter AAR repo: ${repo}`);
+  rmrf(flutterPocLibs);
+  mkdirp(flutterPocLibs);
+  const libs = findFiles(repo, file => {
+    const name = path.basename(file).toLowerCase();
+    return (name.endsWith('.aar') || name.endsWith('.jar'))
+      && !name.endsWith('-sources.jar')
+      && !name.endsWith('-javadoc.jar');
+  });
+  if (!libs.length) throw new Error(`Flutter AAR repo 中没有可打包库: ${repo}`);
+  for (const lib of libs) {
+    const rel = path.relative(repo, lib).replace(/[\\/]+/g, '__');
+    fs.copyFileSync(lib, path.join(flutterPocLibs, rel));
+  }
+  console.log(`已收集 Flutter PoC Android 库: ${flutterPocLibs}`);
+  for (const file of fs.readdirSync(flutterPocLibs).filter(f => /\.(aar|jar)$/i.test(f))) console.log(path.join(flutterPocLibs, file));
 }
 
 function dockerBuildWeb() {
@@ -747,11 +891,17 @@ function dockerPublishServer() {
 
 async function buildApk() {
   await buildWeb();
+  if (flutterPocEnabled) {
+    await installJdk();
+    await installAndroidSdk();
+    await buildFlutterPoc();
+  }
   await restoreAndroid();
   rmrf(apkOut);
   mkdirp(apkOut);
   const signingArgs = apkSigningArgs();
-  dotnet(['publish', androidProject, '-c', config, '-p:AndroidPackageFormat=apk', '-p:EmbedAssembliesIntoApk=true', '--no-restore', ...signingArgs], androidEnv());
+  const flutterArgs = flutterPocEnabled ? ['-p:EnableFlutterPoc=true'] : [];
+  dotnet(['publish', androidProject, '-c', config, '-p:AndroidPackageFormat=apk', '-p:EmbedAssembliesIntoApk=true', ...flutterArgs, '--no-restore', ...signingArgs], androidEnv());
   writeApkStamp();
   copyApksToArtifacts();
 }
@@ -765,6 +915,7 @@ async function dockerBuildApk() {
   if (!exists(localJdkDir)) throw new Error('未找到项目本地 JDK。请先运行: node build.mjs install-deps');
   if (!exists(androidSdkRoot)) throw new Error('未找到项目本地 Android SDK。请先运行: node build.mjs install-deps');
 
+  if (flutterPocEnabled) throw new Error('docker-build-apk 暂不支持 Flutter PoC；请在本机安装 Flutter 后执行 build-apk --enable-flutter-poc=true。');
   const signingArgs = apkSigningArgs().map(dockerMsbuildArg).join(' ');
   if (isApkOutputFresh()) {
     section('跳过 Docker Android APK 发布');
