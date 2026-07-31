@@ -482,9 +482,9 @@ class _SteamDlFlutterPocPageState extends State<SteamDlFlutterPocPage> {
       final body = await response.transform(utf8.decoder).join();
       client.close(force: true);
       final preview = body.length > 1200 ? '\${body.substring(0, 1200)}...' : body;
-      setState(() => _status = 'HTTP \\${response.statusCode}\\n\\n$preview');
+      setState(() => _status = 'HTTP \${response.statusCode}\\n\\n\$preview');
     } catch (e) {
-      setState(() => _status = '请求失败：$e');
+      setState(() => _status = '请求失败：\$e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
